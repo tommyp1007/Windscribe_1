@@ -24,6 +24,7 @@ workflows:
             -scheme "$XCODE_SCHEME" \
             -configuration "$XCODE_CONFIGURATION" \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath "$CM_BUILD_DIR/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \

@@ -34,7 +34,11 @@ final class APIUtilServiceImpl: APIUtilService {
             return nil
         }
         do {
-            return try JSONDecoder().decode(modeType, from: jsonData)
+            let decoded = try JSONDecoder().decode(modeType, from: jsonData)
+            if DebugConfiguration.forceProAccount, let session = decoded as? SessionModel {
+                return session.applyingDebugProOverrideIfNeeded() as? T
+            }
+            return decoded
         } catch {
             print("Decoding Error: \(error)")
             return nil

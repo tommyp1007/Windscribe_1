@@ -144,6 +144,9 @@ struct SessionModel: Codable, Equatable, Sendable {
     var planType: String = "0"
 
     var isUserPro: Bool {
+        if DebugConfiguration.forceProAccount {
+            return true
+        }
         return isPremium || isUserUnlimited
     }
 
@@ -179,7 +182,10 @@ struct SessionModel: Codable, Equatable, Sendable {
     }
 
     var isOutOfData: Bool {
-        status == 2
+        if DebugConfiguration.forceProAccount {
+            return false
+        }
+        return status == 2
     }
 
     var isBanned: Bool {
@@ -376,6 +382,9 @@ struct SessionModel: Codable, Equatable, Sendable {
     }
 
     func getIsPremium() -> Int {
+        if DebugConfiguration.forceProAccount {
+            return 1
+        }
         return isPremium ? 1 : 0
     }
 

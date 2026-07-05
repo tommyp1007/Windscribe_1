@@ -15,6 +15,7 @@ enum AppConstants {
 }
 
 /// Local debugging helpers. Set `forceProAccount` to `false` to restore normal free/pro behavior.
+/// When enabled, every session payload from the API is rewritten to Pro before the app uses it.
 enum DebugConfiguration {
     static let forceProAccount = true
 }

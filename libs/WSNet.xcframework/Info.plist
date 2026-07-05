@@ -5,8 +5,6 @@
 	<key>AvailableLibraries</key>
 	<array>
 		<dict>
-			<key>DebugSymbolsPath</key>
-			<string>dSYMs</string>
 			<key>LibraryIdentifier</key>
 			<string>ios-arm64-simulator</string>
 			<key>LibraryPath</key>
@@ -21,8 +19,6 @@
 			<string>simulator</string>
 		</dict>
 		<dict>
-			<key>DebugSymbolsPath</key>
-			<string>dSYMs</string>
 			<key>LibraryIdentifier</key>
 			<string>tvos-arm64</string>
 			<key>LibraryPath</key>
@@ -35,8 +31,6 @@
 			<string>tvos</string>
 		</dict>
 		<dict>
-			<key>DebugSymbolsPath</key>
-			<string>dSYMs</string>
 			<key>LibraryIdentifier</key>
 			<string>ios-arm64</string>
 			<key>LibraryPath</key>
@@ -49,8 +43,6 @@
 			<string>ios</string>
 		</dict>
 		<dict>
-			<key>DebugSymbolsPath</key>
-			<string>dSYMs</string>
 			<key>LibraryIdentifier</key>
 			<string>tvos-arm64-simulator</string>
 			<key>LibraryPath</key>

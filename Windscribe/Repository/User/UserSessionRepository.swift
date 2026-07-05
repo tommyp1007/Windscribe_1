@@ -92,6 +92,9 @@ class UserSessionRepositoryImpl: UserSessionRepository {
             self.oldSessionModel = self.sessionModel
             self.sessionModel = session
             sessionModelSubject.send(session)
+            if DebugConfiguration.forceProAccount {
+                preferences.saveUserStatus(value: true)
+            }
             if !session.sessionAuthHash.isEmpty {
                 updateSessionAuth(with: session.sessionAuthHash)
             }
