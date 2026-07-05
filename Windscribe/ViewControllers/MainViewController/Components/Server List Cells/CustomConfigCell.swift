@@ -1,0 +1,65 @@
+//
+//  CustomConfigCell.swift
+//  Windscribe
+//
+//  Created by Andre Fonseca on 03/04/2025.
+//  Copyright © 2025 Windscribe. All rights reserved.
+//
+
+import Swinject
+import UIKit
+
+class CustomConfigCellModel: BaseNodeCellViewModel {
+    var displayingCustomConfig: CustomConfigModel?
+
+    override var name: String {
+        displayingCustomConfig?.name ?? ""
+    }
+
+    override var nickName: String {
+        ""
+    }
+
+    override var showServerNetLoad: Bool { false }
+
+    override var iconAspect: UIView.ContentMode { .scaleAspectFit }
+
+    override var iconImage: UIImage? {
+        if displayingCustomConfig?.protocolType == VPNProtocolType.wireGuard.identifier {
+            return UIImage(named: ImagesAsset.customConfigWG)?.withRenderingMode(.alwaysTemplate)
+        } else if TextsAsset.General.openVpnProtocols.contains(displayingCustomConfig?.protocolType ?? "") {
+            return UIImage(named: ImagesAsset.customConfigOVPN)?.withRenderingMode(.alwaysTemplate)
+        }
+        return UIImage(named: ImagesAsset.Servers.config)?.withRenderingMode(.alwaysTemplate)
+    }
+
+    override var actionImage: UIImage? {
+        UIImage(named: ImagesAsset.missingCredentials)?.withRenderingMode(.alwaysTemplate)
+    }
+
+    override var actionRightOffset: CGFloat { areMissingCredentials ? 14.0 : 11.0 }
+
+    override var actionVisible: Bool { areMissingCredentials }
+
+    override var isSignalVisible: Bool { !areMissingCredentials }
+
+    private var areMissingCredentials: Bool {
+        ((displayingCustomConfig?.username ?? "").isEmpty || (displayingCustomConfig?.password ?? "").isEmpty) && (displayingCustomConfig?.authRequired ?? false)
+    }
+
+    func update(displayingCustomConfig: CustomConfigModel?,
+                isDarkMode: Bool,
+                latency: Int) {
+        self.displayingCustomConfig = displayingCustomConfig
+        self.isDarkMode = isDarkMode
+        self.latency = latency
+    }
+}
+
+class CustomConfigCell: BaseNodeCell {
+    var customConfigCellViewModel: CustomConfigCellModel? {
+        didSet {
+            baseNodeCellViewModel = customConfigCellViewModel
+        }
+    }
+}

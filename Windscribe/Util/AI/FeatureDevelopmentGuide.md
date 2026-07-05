@@ -1,0 +1,1525 @@
+# Windscribe iOS - SwiftUI Migration Guide
+
+## Architecture Overview
+
+### Current State
+- **Legacy Framework**: UIKit + RxSwift
+- **Target Framework**: SwiftUI + MVVM + Combine
+- **Migration Strategy**: Gradual, UI-first approach with existing RxSwift bridge
+
+### Migration Constraints
+- **Existing Managers and Coordinators**: **MUST remain in RxSwift** (cannot be refactored at this stage)
+- **New ViewModels**: **MUST use Combine exclusively** (no new RxSwift code allowed)
+- **UI Migration**: SwiftUI Views with Combine-based ViewModels
+- **Service Integration**: Use existing `RxSwift+Extension.swift` bridge for connecting new Combine ViewModels to legacy RxSwift services
+
+### Architecture Layers
+```
+┌─────────────────────────────────────┐
+│           SwiftUI Views             │
+│         (New Implementation)        │
+├─────────────────────────────────────┤
+│      Combine ViewModels             │
+│      (New Implementation)           │
+├─────────────────────────────────────┤
+│        RxSwift Bridge               │
+│   (Existing RxSwift+Extension.swift)│
+├─────────────────────────────────────┤
+│    Legacy RxSwift Services          │
+│  (Managers, Coordinators, etc.)     │
+│      **CANNOT BE CHANGED**          │
+└─────────────────────────────────────┘
+```
+
+## Existing Bridge Implementation
+
+### Overview
+The `RxSwift+Extension.swift` file (located at `Windscribe/Util/Extensions/RxSwift+Extension.swift`) provides comprehensive bridging between RxSwift and Combine. This bridge **already exists** and should be used for all new ViewModels that need to interact with legacy RxSwift services.
+
+### Available Bridge Methods
+
+#### 1. RxSwift Single → Combine Publisher
+```swift
+// Existing implementation in RxSwift+Extension.swift
+extension PrimitiveSequence where Trait == SingleTrait {
+    func asPublisher() -> AnyPublisher<Element, Error>
+}
+
+// Usage in new ViewModels:
+class ConnectionViewModel: ObservableObject {
+    func connect() {
+        vpnManager.connect() // Returns RxSwift Single
+            .asPublisher()    // Convert to Combine
+            .sink(...)
+            .store(in: &cancellables)
+    }
+}
+```
+
+#### 2. RxSwift BehaviorSubject → Combine Publisher
+```swift
+// Existing implementation in RxSwift+Extension.swift
+extension BehaviorSubject {
+    func asPublisher() -> AnyPublisher<Element, Error>
+}
+
+// Usage in new ViewModels:
+class ServerListViewModel: ObservableObject {
+    @Published var servers: [Server] = []
+    
+    private func setupBindings() {
+        serverManager.serversSubject // RxSwift BehaviorSubject
+            .asPublisher()           // Convert to Combine
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$servers)
+    }
+}
+```
+
+#### 3. RxSwift Observable → Combine Publisher
+```swift
+// Existing implementation in RxSwift+Extension.swift
+extension Observable {
+    func toPublisher() -> AnyPublisher<Element, Error>
+    func toInitialPublisher() -> AnyPublisher<Element, Error>
+}
+
+extension ObservableType {
+    func toPublisher() -> AnyPublisher<Element, Error>
+    func toPublisher(initialValue: Element) -> AnyPublisher<Element, Error>
+}
+
+// Usage in new ViewModels:
+class NetworkStatusViewModel: ObservableObject {
+    @Published var isConnected = false
+    
+    private func setupBindings() {
+        networkManager.connectionState // RxSwift Observable
+            .toPublisher()             // Convert to Combine
+            .map { $0 == .connected }
+            .assign(to: &$isConnected)
+    }
+}
+```
+
+#### 4. Synchronous Void Functions → Combine Publisher
+```swift
+// Existing implementation in RxSwift+Extension.swift
+func asVoidPublisher(_ action: @escaping () -> Void) -> AnyPublisher<Void, Error>
+
+// Usage in new ViewModels:
+class SettingsViewModel: ObservableObject {
+    func saveSettings() {
+        asVoidPublisher {
+            preferencesManager.saveSettings() // Synchronous void function
+        }
+        .sink(
+            receiveCompletion: { completion in
+                // Handle completion
+            },
+            receiveValue: { _ in
+                // Settings saved
+            }
+        )
+        .store(in: &cancellables)
+    }
+}
+```
+
+### Bridge Error Handling
+The bridge includes proper error handling with `RxBridgeError`:
+```swift
+enum RxBridgeError: Error {
+    case missingInitialValue
+}
+```
+
+## Migration Patterns
+
+### Pattern 1: ViewModel with Legacy Service Integration
+```swift
+class VPNConnectionViewModel: ObservableObject {
+    @Published var connectionState: VPNState = .disconnected
+    @Published var selectedServer: Server?
+    @Published var isConnecting = false
+    @Published var errorMessage: String?
+    
+    private let vpnManager: VPNManager          // Legacy RxSwift service
+    private let serverManager: ServerManager    // Legacy RxSwift service
+    private var cancellables = Set<AnyCancellable>()
+    
+    init(vpnManager: VPNManager, serverManager: ServerManager) {
+        self.vpnManager = vpnManager
+        self.serverManager = serverManager
+        setupBindings()
+    }
+    
+    private func setupBindings() {
+        // Bridge RxSwift BehaviorSubject to Combine
+        vpnManager.connectionStateSubject
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { [weak self] completion in
+                    if case .failure(let error) = completion {
+                        self?.errorMessage = error.localizedDescription
+                    }
+                },
+                receiveValue: { [weak self] state in
+                    self?.connectionState = state
+                    self?.isConnecting = (state == .connecting)
+                }
+            )
+            .store(in: &cancellables)
+        
+        // Bridge RxSwift Observable to Combine
+        serverManager.selectedServerObservable
+            .toPublisher()
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$selectedServer)
+    }
+    
+    func connect() {
+        guard let server = selectedServer else { return }
+        
+        isConnecting = true
+        errorMessage = nil
+        
+        // Bridge RxSwift Single to Combine
+        vpnManager.connect(to: server)
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { [weak self] completion in
+                    self?.isConnecting = false
+                    if case .failure(let error) = completion {
+                        self?.errorMessage = error.localizedDescription
+                    }
+                },
+                receiveValue: { _ in
+                    // Connection initiated successfully
+                }
+            )
+            .store(in: &cancellables)
+    }
+    
+    func disconnect() {
+        // Bridge synchronous void function to Combine
+        asVoidPublisher {
+            self.vpnManager.disconnect()
+        }
+        .sink(
+            receiveCompletion: { [weak self] completion in
+                if case .failure(let error) = completion {
+                    self?.errorMessage = error.localizedDescription
+                }
+            },
+            receiveValue: { _ in
+                // Disconnection completed
+            }
+        )
+        .store(in: &cancellables)
+    }
+}
+```
+
+### Pattern 2: SwiftUI View with Combine ViewModel
+```swift
+struct VPNConnectionView: View {
+    @StateObject private var viewModel: VPNConnectionViewModel
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // Connection Status
+            VStack {
+                Text("Status: \(viewModel.connectionState.displayName)")
+                    .font(.headline)
+                
+                if let server = viewModel.selectedServer {
+                    Text("Server: \(server.name)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Connect/Disconnect Button
+            Button(action: {
+                if viewModel.connectionState == .disconnected {
+                    viewModel.connect()
+                } else {
+                    viewModel.disconnect()
+                }
+            }) {
+                if viewModel.isConnecting {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Connecting...")
+                    }
+                } else {
+                    Text(viewModel.connectionState == .disconnected ? "Connect" : "Disconnect")
+                }
+            }
+            .disabled(viewModel.isConnecting)
+            
+            // Error Message
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding()
+    }
+}
+```
+
+## Conventions and Guidelines
+
+### 1. ViewModels Must Use Combine Only
+- **Rule**: No new RxSwift code in ViewModels
+- **Implementation**: Use existing bridge methods to convert RxSwift services to Combine
+- **Exception**: None - this is a strict requirement
+
+```swift
+// ✅ Correct: Using bridge to convert RxSwift to Combine
+class NewFeatureViewModel: ObservableObject {
+    @Published var data: [Item] = []
+    
+    private func loadData() {
+        legacyService.fetchItems() // RxSwift Single
+            .asPublisher()         // Convert to Combine
+            .assign(to: &$data)
+    }
+}
+
+// ❌ Incorrect: Using RxSwift directly in new ViewModels
+class NewFeatureViewModel: ObservableObject {
+    private let disposeBag = DisposeBag() // ❌ No RxSwift in new code
+    
+    private func loadData() {
+        legacyService.fetchItems()
+            .subscribe(onSuccess: { ... }) // ❌ No RxSwift subscriptions
+            .disposed(by: disposeBag)
+    }
+}
+```
+
+### 2. Legacy Services Cannot Be Modified
+- **Rule**: Existing RxSwift Managers and Coordinators remain unchanged
+- **Rationale**: Minimize risk and maintain stability during migration
+- **Implementation**: Use bridge methods to integrate with legacy services
+
+```swift
+// ✅ Correct: Using existing VPNManager as-is
+class ConnectionViewModel: ObservableObject {
+    private let vpnManager: VPNManager // Legacy RxSwift service - unchanged
+    
+    func connect() {
+        vpnManager.connect()    // Legacy RxSwift method
+            .asPublisher()      // Bridge to Combine
+            .sink(...)
+    }
+}
+
+// ❌ Incorrect: Modifying legacy services
+class ConnectionViewModel: ObservableObject {
+    private let vpnManager: VPNManager
+    
+    func connect() {
+        // ❌ Don't modify VPNManager to return Combine publishers
+        vpnManager.connectWithCombine() // This method doesn't exist
+    }
+}
+```
+
+### 3. Use @Published for All UI State
+- **Rule**: Expose all UI-relevant state through @Published properties
+- **Implementation**: Transform RxSwift streams to @Published properties via bridge
+
+```swift
+class ServerListViewModel: ObservableObject {
+    @Published var servers: [Server] = []
+    @Published var isLoading = false
+    @Published var selectedServer: Server?
+    
+    private func setupBindings() {
+        // Convert RxSwift to @Published properties
+        serverManager.serversObservable
+            .toPublisher()
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$servers)
+        
+        serverManager.loadingStateSubject
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isLoading)
+    }
+}
+```
+
+### 4. Dependency Injection for ViewModels
+- **Rule**: Inject legacy services through initializers
+- **Implementation**: Pass RxSwift services to ViewModels, use bridge internally
+
+```swift
+class AuthViewModel: ObservableObject {
+    private let authManager: AuthManager // Legacy RxSwift service
+    private let apiManager: APIManager   // Legacy RxSwift service
+    
+    init(authManager: AuthManager, apiManager: APIManager) {
+        self.authManager = authManager
+        self.apiManager = apiManager
+        setupBindings()
+    }
+    
+    private func setupBindings() {
+        // Use bridge to convert RxSwift to Combine
+        authManager.authStateSubject
+            .asPublisher()
+            .assign(to: &$isAuthenticated)
+    }
+}
+```
+
+## Migration Checklist
+
+### For Each New SwiftUI Feature
+- [ ] Create SwiftUI View (no UIKit)
+- [ ] Implement Combine-based ViewModel (no RxSwift)
+- [ ] Use existing `RxSwift+Extension.swift` bridge methods
+- [ ] Inject legacy RxSwift services through initializer
+- [ ] Convert all RxSwift streams to @Published properties
+- [ ] Handle errors appropriately in Combine pipeline
+- [ ] Test integration with legacy services
+
+### Bridge Usage Verification
+- [ ] Verify `RxSwift+Extension.swift` contains required bridge methods
+- [ ] Use `asPublisher()` for Singles and BehaviorSubjects
+- [ ] Use `toPublisher()` for Observables
+- [ ] Use `asVoidPublisher()` for synchronous void functions
+- [ ] Handle `RxBridgeError.missingInitialValue` when needed
+
+## Common Migration Scenarios
+
+### Scenario 1: Migrating Connection Screen
+```swift
+// Old UIKit + RxSwift (don't modify)
+class ConnectionViewController: UIViewController {
+    // Keep existing implementation
+}
+
+// New SwiftUI + Combine
+class ConnectionViewModel: ObservableObject {
+    @Published var state: VPNState = .disconnected
+    
+    private let vpnManager: VPNManager // Legacy service
+    
+    init(vpnManager: VPNManager) {
+        self.vpnManager = vpnManager
+        
+        // Bridge legacy RxSwift to Combine
+        vpnManager.connectionStateSubject
+            .asPublisher()
+            .assign(to: &$state)
+    }
+}
+
+struct ConnectionView: View {
+    @StateObject private var viewModel: ConnectionViewModel
+    
+    var body: some View {
+        // SwiftUI implementation
+    }
+}
+```
+
+### Scenario 2: Migrating Settings Screen
+```swift
+class SettingsViewModel: ObservableObject {
+    @Published var preferences: UserPreferences?
+    @Published var isLoading = false
+    
+    private let preferencesManager: PreferencesManager // Legacy service
+    
+    init(preferencesManager: PreferencesManager) {
+        self.preferencesManager = preferencesManager
+        loadPreferences()
+    }
+    
+    private func loadPreferences() {
+        preferencesManager.getPreferences() // RxSwift Single
+            .asPublisher()                   // Bridge to Combine
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { _ in },
+                receiveValue: { [weak self] preferences in
+                    self?.preferences = preferences
+                }
+            )
+            .store(in: &cancellables)
+    }
+}
+```
+
+## Best Practices
+
+### 1. Error Handling
+```swift
+class DataViewModel: ObservableObject {
+    @Published var errorMessage: String?
+    
+    private func loadData() {
+        dataService.fetchData()
+            .asPublisher()
+            .sink(
+                receiveCompletion: { [weak self] completion in
+                    if case .failure(let error) = completion {
+                        self?.errorMessage = error.localizedDescription
+                    }
+                },
+                receiveValue: { data in
+                    // Handle success
+                }
+            )
+            .store(in: &cancellables)
+    }
+}
+```
+
+### 2. Loading States
+```swift
+class LoadingViewModel: ObservableObject {
+    @Published var isLoading = false
+    @Published var data: [Item] = []
+    
+    func refresh() {
+        isLoading = true
+        
+        service.fetchItems()
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { [weak self] _ in
+                    self?.isLoading = false
+                },
+                receiveValue: { [weak self] items in
+                    self?.data = items
+                }
+            )
+            .store(in: &cancellables)
+    }
+}
+```
+
+### 3. Combining Multiple RxSwift Streams
+```swift
+class CombinedViewModel: ObservableObject {
+    @Published var combinedData: CombinedData?
+    
+    private func setupBindings() {
+        let publisher1 = service1.dataObservable.toPublisher()
+        let publisher2 = service2.dataObservable.toPublisher()
+        
+        Publishers.CombineLatest(publisher1, publisher2)
+            .map { data1, data2 in
+                CombinedData(first: data1, second: data2)
+            }
+            .assign(to: &$combinedData)
+    }
+}
+```
+
+## Testing Strategy
+
+### ViewModel Testing
+```swift
+class ConnectionViewModelTests: XCTestCase {
+    private var sut: ConnectionViewModel!
+    private var mockVPNManager: MockVPNManager!
+    
+    override func setUp() {
+        super.setUp()
+        mockVPNManager = MockVPNManager()
+        sut = ConnectionViewModel(vpnManager: mockVPNManager)
+    }
+    
+    func testConnectionStateUpdates() {
+        // Test that bridge correctly converts RxSwift to Combine
+        let expectation = expectation(description: "State updated")
+        
+        sut.$connectionState
+            .sink { state in
+                if state == .connected {
+                    expectation.fulfill()
+                }
+            }
+            .store(in: &cancellables)
+        
+        mockVPNManager.connectionStateSubject.onNext(.connected)
+        
+        wait(for: [expectation], timeout: 1.0)
+    }
+}
+```
+
+## Future Considerations
+
+### Bridge Evolution
+- Monitor bridge performance and memory usage
+- Consider optimizations as more features migrate
+- Document any new bridge methods added to `RxSwift+Extension.swift`
+
+### Complete Migration
+- Eventually, when all UI is migrated to SwiftUI, consider gradual migration of legacy services
+- Bridge will remain necessary until legacy services are converted
+- Plan for gradual service layer migration in future phases
+
+## Real-World Migration Example: Location Permission Feature
+
+### PR Analysis: Converting UIKit to SwiftUI + Combine ViewModel
+
+Based on an actual PR in the codebase, here's a real-world example of how the migration strategy works in practice. This serves as a template for other refactoring feature parts.
+
+#### What Actually Happened
+
+1. **ADDED**: SwiftUI `LocationPermissionInfoView` and `LocationPermissionInfoViewModel` (using Combine with RxSwift bridge)
+2. **REMOVED**: UIKit `LocationPermissionDisclosureViewController` (old UIKit approach)
+3. **CONVERTED**: `LocationMainViewModel` → `LocationPermissionManager` (still RxSwift but more reactive, as managers/repositories aren't converted yet)
+4. **ELIMINATED**: Callback patterns and delegate passing through routers
+5. **REACTIVE**: Everything now works through reactive observables - SwiftUI Views observe ViewModel state through Combine
+
+#### The Migration Pattern Applied
+
+##### 1. UIKit Controller → SwiftUI View + Combine ViewModel
+```swift
+// BEFORE: UIKit Controller (old approach)
+class LocationPermissionDisclosureViewController: WSUIViewController {
+    weak var delegate: DisclosureAlertDelegate?
+    var denied: Bool = false
+    
+    @objc func actionButtonTapped() {
+        if denied {
+            delegate?.openLocationSettingsClicked()
+        } else {
+            delegate?.grantPermissionClicked()
+        }
+        dismiss(animated: true, completion: nil)
+    }
+}
+
+// AFTER: SwiftUI View + Combine ViewModel (new approach)
+struct LocationPermissionInfoView: View {
+    @StateObject private var viewModel: LocationPermissionInfoViewModelImpl
+    
+    var body: some View {
+        // SwiftUI declarative UI
+        Button(action: viewModel.handlePrimaryAction) {
+            Text(viewModel.accessDenied ? "Open Settings" : "Grant Permission")
+        }
+    }
+}
+
+class LocationPermissionInfoViewModelImpl: LocationPermissionInfoViewModel {
+    @Published var isDarkMode: Bool = false
+    @Published var accessDenied: Bool = false
+    
+    private func bind() {
+        // Use RxSwift bridge to connect to legacy services
+        manager.locationStatusSubject
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] status in
+                self?.accessDenied = (status == .denied)
+            })
+            .store(in: &cancellables)
+    }
+}
+```
+
+##### 2. ViewModel Inside Controller → Dedicated Reactive Manager
+```swift
+// BEFORE: ViewModel logic scattered inside MainViewController
+class MainViewController: WSUIViewController {
+    private func handleLocationPermission() {
+        // Logic mixed with UI controller
+    }
+}
+
+// AFTER: Dedicated reactive manager
+class LocationPermissionManager: NSObject, LocationPermissionManaging {
+    let locationStatusSubject = BehaviorSubject<CLAuthorizationStatus>(value: .notDetermined)
+    let shouldShowPermissionUI = PublishSubject<Void>()
+    
+    func requestLocationPermission() {
+        // Centralized, reactive logic
+        let status = getStatus()
+        shouldShowPermissionUI.onNext(())
+        locationStatusSubject.onNext(status)
+    }
+}
+```
+
+##### 3. Callback/Delegate Passing → Pure Reactive Observation
+```swift
+// BEFORE: Callback patterns
+vpnConnectionViewModel.requestLocationTrigger
+    .flatMap { [weak self] _ -> Single<Void> in
+        return self?.locationPermissionManager.requestLocationPermissionFlow()
+    }
+    .subscribe(onNext: { [weak self] in
+        self?.router?.routeTo(to: .protocolSetPreferred, from: self)
+    })
+
+// AFTER: Pure reactive observation
+vpnConnectionViewModel.requestLocationTrigger
+    .observe(on: MainScheduler.asyncInstance)
+    .subscribe(onNext: {
+        self.locationPermissionManager.requestLocationPermission()
+    })
+
+// SwiftUI View observes manager state reactively
+manager.locationStatusSubject
+    .asPublisher()
+    .receive(on: DispatchQueue.main)
+    .sink(receiveValue: { [weak self] status in
+        if status == .authorizedWhenInUse {
+            // React to state change
+        }
+    })
+```
+
+##### 4. Router Passes Values → Router Triggers, Views Observe Reactively
+```swift
+// BEFORE: Router passes values and delegates
+case let RouteID.locationPermission(delegate, denied):
+    let vc = LocationPermissionInfoViewController()
+    vc.delegate = delegate
+    vc.denied = denied
+    from.present(vc, animated: true)
+
+// AFTER: Router only triggers, Views observe state
+case RouteID.locationPermission:
+    let locationPermissionView = LocationPermissionInfoView(
+        viewModel: LocationPermissionInfoViewModelImpl(
+            manager: resolver.resolve(LocationPermissionManaging.self)!
+        )
+    )
+    presentViewModally(from: from, view: locationPermissionView)
+
+// ViewModel observes manager state reactively
+manager.locationStatusSubject
+    .asPublisher()
+    .sink(receiveValue: { [weak self] status in
+        self?.accessDenied = (status == .denied)
+        if status == .authorizedWhenInUse {
+            self?.shouldDismiss = true
+        }
+    })
+```
+
+#### Key Implementation Details
+
+##### 1. Bridge Usage in Practice
+```swift
+class LocationPermissionInfoViewModelImpl: LocationPermissionInfoViewModel {
+    private func bind() {
+        // Bridge RxSwift BehaviorSubject to Combine
+        manager.locationStatusSubject
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] status in
+                self?.accessDenied = (status == .denied)
+            })
+            .store(in: &cancellables)
+        
+        // Bridge look and feel repository
+        lookAndFeelRepository.isDarkModeSubject
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isDarkMode)
+    }
+}
+```
+
+##### 2. Dependency Injection Updates
+```swift
+// Updated DI registration for new ViewModel
+container.register((any LocationPermissionInfoViewModel).self) { r in
+    LocationPermissionInfoViewModelImpl(
+        manager: r.resolve(LocationPermissionManaging.self)!,
+        logger: r.resolve(FileLogger.self)!,
+        lookAndFeelRepository: r.resolve(LookAndFeelRepositoryType.self)!
+    )
+}.inObjectScope(.transient)
+
+// SwiftUI View registration
+container.register(LocationPermissionInfoView.self) { r in
+    LocationPermissionInfoView(
+        viewModel: r.resolve((any LocationPermissionInfoViewModel).self)!
+    )
+}.inObjectScope(.transient)
+```
+
+##### 3. Reactive State Management
+```swift
+class LocationPermissionInfoViewModelImpl: LocationPermissionInfoViewModel {
+    @Published var isDarkMode: Bool = false
+    @Published var accessDenied: Bool = false
+    @Published var shouldDismiss: Bool = false
+    
+    func handlePrimaryAction() {
+        if accessDenied {
+            manager.openSettings()
+        } else {
+            manager.grantPermission()
+        }
+    }
+}
+```
+
+#### Benefits of This Migration Pattern
+
+1. **Declarative UI**: SwiftUI provides cleaner, more maintainable UI code
+2. **Reactive State**: @Published properties automatically update UI
+3. **Separation of Concerns**: ViewModel handles logic, View handles presentation
+4. **Testability**: ViewModels can be easily unit tested
+5. **Consistency**: All new features follow the same reactive pattern
+
+#### Migration Checklist for Other Features
+
+Use this pattern as a template for migrating other UIKit features:
+
+- [ ] **Identify UIKit Controller**: Find the UIKit view controller to migrate
+- [ ] **Create SwiftUI View**: Build equivalent SwiftUI view with declarative UI
+- [ ] **Create Combine ViewModel**: Implement ViewModel with @Published properties
+- [ ] **Use RxSwift Bridge**: Connect to legacy services using existing bridge methods
+- [ ] **Update DI Registration**: Register new ViewModel and View in dependency injection
+- [ ] **Update Router**: Simplify routing to only trigger, not pass values
+- [ ] **Remove Callbacks**: Replace callback patterns with reactive observation
+- [ ] **Test Integration**: Ensure bridge works correctly with legacy services
+
+#### Future Refactoring Template
+
+This Location Permission example serves as the blueprint for converting other features:
+
+1. **Authentication flows**
+2. **Settings screens**
+3. **Network selection**
+4. **Protocol switching**
+5. **Plan upgrade flows**
+
+Each should follow the same pattern: UIKit → SwiftUI + Combine ViewModel with RxSwift bridge integration.
+
+---
+
+**Key Takeaways:**
+1. **Use existing bridge** - Connect Combine ViewModels to RxSwift services
+2. **No RxSwift in ViewModels** - Strict Combine-only policy for new SwiftUI ViewModels
+3. **Don't modify legacy services** - Use bridge to integrate with existing RxSwift managers
+4. **Follow established patterns** - Use this Location Permission example as template
+5. **Pure reactive approach** - Eliminate callbacks, use reactive observation
+6. **Router simplification** - Routers trigger, Views observe state reactively
+
+*This guide reflects the current migration strategy with a proven real-world example. Use the Location Permission pattern as a template for other feature migrations.*
+
+## Real-World Migration Example 2: Push Notifications Popup
+
+### Simplified Popup Migration Pattern
+
+This second example demonstrates a **simpler migration pattern** for basic popup views without complex state management or parameter passing.
+
+#### Key Migration Insights
+
+**Code Reduction & Modernization:**
+- **Before**: 188 lines across 3 files (UIKit controller + UI extension + RxSwift ViewModel)  
+- **After**: 170 lines in 2 files (SwiftUI view + Combine ViewModel)
+- **9% code reduction** with significantly improved maintainability
+
+#### Critical Pattern Differences from Location Permission
+
+##### 1. Dismissal Pattern Evolution
+```swift
+// ❌ Old: NotificationCenter-based dismissal
+class PushNotificationViewModel: PushNotificationViewModelType {
+    func cancel() {
+        NotificationCenter.default.post(
+            Notification(name: Notifications.dismissPushNotificationPermissionPopup)
+        )
+    }
+}
+
+// ✅ New: Reactive dismissal with SwiftUI Environment
+struct PushNotificationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var viewModel: PushNotificationViewModelImpl
+    
+    var body: some View {
+        // UI code...
+        .onChange(of: viewModel.shouldDismiss) { shouldDismiss in
+            if shouldDismiss {
+                dismiss()
+            }
+        }
+    }
+}
+
+final class PushNotificationViewModelImpl: PushNotificationViewModel {
+    @Published var shouldDismiss: Bool = false
+    
+    func enableNotifications() {
+        pushNotificationsManager.askForPushNotificationPermission()
+        shouldDismiss = true  // Reactive dismissal trigger
+    }
+}
+```
+
+##### 2. Dependency Injection Simplification
+```swift
+// ✅ New: Direct SwiftUI View registration (simpler than Location Permission)
+container.register(PushNotificationView.self) { r in
+    PushNotificationView(viewModel: PushNotificationViewModelImpl(
+        logger: r.resolve(FileLogger.self)!,
+        lookAndFeelRepository: r.resolve(LookAndFeelRepositoryType.self)!,
+        pushNotificationsManager: r.resolve(PushNotificationManager.self)!)
+    )
+}.inObjectScope(.transient)
+```
+
+##### 3. Router Conversion
+```swift
+// ✅ Clean router conversion (no parameters needed)
+case .pushNotifications:
+    let pushNotificationView = Assembler.resolve(PushNotificationView.self)
+    presentViewModally(from: from, view: pushNotificationView)
+    return
+```
+
+#### When to Use This Simpler Pattern
+
+**Use Push Notifications pattern for:**
+- Simple popup views with basic user actions
+- Views that don't require complex state management
+- Straightforward permission requests or confirmations
+- Views with minimal external dependencies
+
+**Use Location Permission pattern for:**
+- Complex state transitions and parameter passing
+- Views requiring dedicated state managers
+- Multi-step workflows with external coordination
+
+#### Migration Decision Matrix
+
+| Feature Type | Use Pattern | Key Indicators |
+|--------------|-------------|----------------|
+| **Simple Popups** | Push Notifications | Basic actions, no state sharing, direct dismissal |
+| **Permission Flows** | Location Permission | Complex state, parameter passing, external coordination |
+| **Settings Screens** | Location Permission + State Manager | Multiple parameters, persistent state |
+| **Authentication** | Location Permission + State Manager | Multi-step flows, shared state |
+
+## Advanced Migration Patterns: State Management Architecture
+
+### State Manager Pattern for Complex Parameter Passing
+
+**Problem**: Parameter passing through RouteID creates tight coupling and complex state management.
+
+**Solution**: Use dedicated state managers with reactive patterns to eliminate parameter passing.
+
+#### Implementation Pattern
+
+```swift
+// ❌ Poor: Passing parameters through router
+enum RouteID {
+    case enterCredentials(config: CustomConfigModel, isUpdating: Bool)
+}
+
+// Router passes parameters directly
+case let .enterCredentials(config, isUpdating):
+    let vc = EnterCredentialsViewController()
+    vc.config = config
+    vc.isUpdating = isUpdating
+
+// ✅ Better: Clean router + state manager
+enum RouteID {
+    case enterCredentials // Clean, no parameters
+}
+
+// State manager holds reactive state
+protocol CustomConfigStateManaging {
+    var currentConfigSubject: BehaviorSubject<CustomConfigModel?> { get }
+    var isUpdatingSubject: BehaviorSubject<Bool> { get }
+    
+    func setCurrentConfig(_ config: CustomConfigModel, isUpdating: Bool)
+    func clearCurrentConfig()
+}
+
+class CustomConfigStateManager: CustomConfigStateManaging {
+    let currentConfigSubject = BehaviorSubject<CustomConfigModel?>(value: nil)
+    let isUpdatingSubject = BehaviorSubject<Bool>(value: false)
+    
+    func setCurrentConfig(_ config: CustomConfigModel, isUpdating: Bool) {
+        currentConfigSubject.onNext(config)
+        isUpdatingSubject.onNext(isUpdating)
+    }
+    
+    func clearCurrentConfig() {
+        currentConfigSubject.onNext(nil)
+        isUpdatingSubject.onNext(false)
+    }
+}
+```
+
+#### ViewModel Integration
+
+```swift
+// ViewModel subscribes to state manager reactively
+class EnterCredentialsViewModelImpl: EnterCredentialsViewModel {
+    private let customConfigStateManager: CustomConfigStateManaging
+    private var displayingCustomConfig: CustomConfigModel?
+    
+    private func bind() {
+        // Subscribe to current config changes
+        customConfigStateManager.currentConfigSubject
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] config in
+                self?.displayingCustomConfig = config
+                self?.title = config?.name ?? ""
+                self?.username = config?.username?.base64Decoded() ?? ""
+                self?.password = config?.password?.base64Decoded() ?? ""
+            })
+            .store(in: &cancellables)
+        
+        // Subscribe to updating state changes
+        customConfigStateManager.isUpdatingSubject
+            .asPublisher()
+            .receive(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] isUpdating in
+                self?.isUpdating = isUpdating
+            })
+            .store(in: &cancellables)
+    }
+}
+```
+
+#### Usage in Legacy Code
+
+```swift
+// Legacy controllers set state before routing
+customConfigStateManager.setCurrentConfig(config, isUpdating: true)
+popupRouter?.routeTo(to: .enterCredentials, from: self)
+
+// Legacy bindings integration
+customConfigPickerViewModel.showEditCustomConfigTrigger.subscribe(onNext: {
+    self.customConfigStateManager.setCurrentConfig($0, isUpdating: true)
+    self.popupRouter?.routeTo(to: .enterCredentials, from: self)
+}).disposed(by: disposeBag)
+```
+
+#### Benefits of State Manager Pattern
+
+1. **Eliminates Parameter Passing**: Router IDs become clean enums without parameters
+2. **Reactive State Management**: ViewModels observe state changes reactively
+3. **Separation of Concerns**: State management separate from routing logic
+4. **Testability**: State managers can be easily mocked and tested
+5. **Consistency**: All state changes flow through reactive streams
+
+#### DI Configuration
+
+```swift
+// Register state manager as singleton
+container.register(CustomConfigStateManaging.self) { r in
+    CustomConfigStateManager(logger: r.resolve(FileLogger.self)!)
+}.inObjectScope(.container)
+
+// Inject into ViewModels
+container.register((any EnterCredentialsViewModel).self) { r in
+    EnterCredentialsViewModelImpl(
+        customConfigStateManager: r.resolve(CustomConfigStateManaging.self)!
+    )
+}.inObjectScope(.transient)
+
+// Inject into MainViewController for legacy integration
+container.register(MainViewController.self) { _ in
+    MainViewController()
+}.initCompleted { r, vc in
+    vc.customConfigStateManager = r.resolve(CustomConfigStateManaging.self)!
+}
+```
+
+#### When to Use State Manager Pattern
+
+Use this pattern when:
+- Multiple parameters need to be passed through routing
+- State needs to be shared between different ViewModels
+- Complex state transitions require coordination
+- Legacy code needs to trigger SwiftUI views with data
+
+#### Migration Checklist for State Management
+
+- [ ] **Identify Parameter Passing**: Find RouteID cases with parameters
+- [ ] **Create State Manager**: Implement reactive state management protocol
+- [ ] **Update RouteID**: Remove parameters from router enum
+- [ ] **Update ViewModel**: Subscribe to state manager using RxSwift bridge
+- [ ] **Update Legacy Integration**: Set state before routing
+- [ ] **Register in DI**: Configure state manager as singleton
+- [ ] **Test Integration**: Verify state flows correctly between components
+
+This pattern eliminates architectural complexity while maintaining clean separation between routing and state management.
+
+---
+
+### Test Coverage Guidelines
+
+**Minimum test coverage for each repository:**
+
+1. **Success Cases (per method)**
+   - Happy path with valid data
+   - Verify return values match expected data
+   - Verify dependencies were called correctly
+
+2. **Failure Cases (per method)**
+   - API/network failures
+   - Invalid session/authentication errors
+   - Missing required data
+
+3. **Edge Cases**
+   - Empty results
+   - Null/optional handling
+   - Boundary values (zero, negative, very large numbers)
+
+4. **Integration Tests**
+   - Multiple method calls in sequence
+   - Concurrent operations
+   - State persistence across calls
+
+**Target**: 15-25 tests per repository (depending on complexity)
+
+---
+
+### Migration Benefits
+
+**Before Repository Conversion:**
+- ViewModels use `.asPublisher()` bridge
+- Repository depends on RxSwift
+- DisposeBag memory management required
+- Mixed reactive paradigms
+
+**After Repository Conversion:**
+- ViewModels use direct Combine publishers
+- Repository is pure Combine
+- Automatic Combine cancellation
+- Consistent reactive architecture
+
+**Result**: Cleaner code, better performance, easier maintenance
+
+---
+
+### Real-World Example: ShakeDataRepository
+
+**Files Changed:**
+1. `ShakeDataRepository.swift` (protocol)
+2. `ShakeDataRepositoryImpl.swift` (implementation)
+3. `ShakeForDataResultsViewModel.swift` (removed bridge)
+4. `ShakeForDataLeaderboardModel.swift` (removed bridge)
+
+**Files Created:**
+1. `MockAPIManager.swift` (39 protocol methods)
+2. `MockSessionManager.swift` (7 protocol methods)
+3. `SampleDataLeaderboard.swift` (test JSON data)
+4. `ShakeDataRepositoryTests.swift` (24 test cases)
+
+**Results:**
+- ✅ 24/24 tests passing
+- ✅ No RxSwift dependencies in repository layer
+- ✅ ViewModels simplified (no bridge calls)
+- ✅ Full Combine integration
+
+---
+
+**Key Takeaway**: Repository conversion is straightforward when following this pattern. The most time-consuming part is creating comprehensive mocks and tests, but this ensures reliability and prevents regressions.
+
+---
+
+## CRITICAL: Realm Threading Best Practices
+
+### ⚠️ MANDATORY PATTERN - DO NOT STORE REALM OBJECTS IN MEMORY
+
+**This is a CRITICAL architecture pattern that must be followed for all future development involving Realm.**
+
+### The Problem: Realm Threading Violations
+
+Realm objects are **NOT thread-safe** and cause crashes when:
+- Created on one thread and accessed from another
+- Stored in memory (BehaviorSubjects, properties) and accessed later from different threads
+- Passed between async contexts without proper handling
+
+**Common Crash:**
+```
+*** Terminating app due to uncaught exception 'RLMException',
+reason: 'Realm accessed from incorrect thread.'
+```
+
+### ❌ WRONG: Storing Realm Objects Directly
+
+**DO NOT DO THIS:**
+```swift
+// BAD - Storing Realm objects that can be accessed from multiple threads
+class LatencyRepositoryImpl {
+    let latency: BehaviorSubject<[PingData]> = BehaviorSubject(value: [])
+    //                             ^^^^^^^^^ Realm Object - WRONG!
+
+    func getPingData(ip: String) -> PingData? {
+        let value = try? latency.value()
+        return value?.first { !$0.isInvalidated && $0.ip == ip }
+        // Crash! Accessing Realm object from different thread
+    }
+}
+```
+
+**Why This Fails:**
+1. `PingData` is a Realm `Object` class
+2. Stored in `BehaviorSubject` on Thread A
+3. Accessed from Thread B (e.g., table view rendering on main thread)
+4. **Result**: Threading violation crash
+
+### ✅ CORRECT: Use Plain Value Types (Model Pattern)
+
+**The Solution - Create Thread-Safe Model Structs:**
+
+#### Step 1: Create Plain Value Model
+
+Add model struct in the same file as the Realm object:
+
+```swift
+// In PingData.swift
+import RealmSwift
+
+@objcMembers class PingData: Object {
+    dynamic var ip: String = ""
+    dynamic var latency = -1
+
+    convenience init(ip: String, latency: Int) {
+        self.init()
+        self.ip = ip
+        self.latency = latency
+    }
+
+    // Add reverse conversion for database operations
+    convenience init(from: PingDataModel) {
+        self.init()
+        ip = from.ip
+        latency = from.latency
+    }
+
+    override static func primaryKey() -> String? {
+        return "ip"
+    }
+}
+
+// ✅ Thread-safe value type
+struct PingDataModel {
+    var ip: String = ""
+    var latency = -1
+
+    // Convert FROM Realm object
+    init(from: PingData) {
+        ip = from.ip
+        latency = from.latency
+    }
+}
+```
+
+#### Step 2: Store Models Instead of Realm Objects
+
+```swift
+class LatencyRepositoryImpl {
+    // ✅ Store plain models, NOT Realm objects
+    let latency: BehaviorSubject<[PingDataModel]> = BehaviorSubject(value: [])
+
+    // Helper to convert Realm objects to models
+    private func getPingDataModel() -> [PingDataModel] {
+        database.getAllPingData().map { PingDataModel(from: $0) }
+    }
+
+    // ✅ Safe - returns plain model
+    func getPingData(ip: String) -> PingDataModel? {
+        let value = try? latency.value()
+        return value?.first { $0.ip == ip }
+        // No threading issues - plain struct!
+    }
+}
+```
+
+#### Step 3: Convert at Storage Boundaries
+
+**Convert Realm → Model immediately when storing:**
+
+```swift
+// ✅ In init
+init(...) {
+    latency.onNext(database.getAllPingData().map { PingDataModel(from: $0) })
+}
+
+// ✅ After database operations
+func loadLatency() {
+    createLatencyTask(...)
+        .do(onSuccess: { _ in
+            self.latency.onNext(self.getPingDataModel())
+        })
+}
+
+// ✅ When refreshing data
+func refreshBestLocation() {
+    let pingData = database.getAllPingData().map { PingDataModel(from: $0) }
+    self.latency.onNext(pingData)
+    self.pickBestLocation(pingData: pingData)
+}
+```
+
+### Real-World Example: LatencyRepository Fix (Issue #904)
+
+**Problem:** App crashed on startup with `RLMException: Realm accessed from incorrect thread`
+
+**Root Cause:**
+- Commit `8f4a99ce` added `refreshBestLocation()` to `init()`
+- This stored Realm `PingData` objects in `latency` BehaviorSubject
+- Later accessed from main thread (table view) → crash
+
+**Solution Applied (Commit cd5ece0f):**
+
+1. Created `PingDataModel` struct in `PingData.swift`
+2. Changed BehaviorSubject: `BehaviorSubject<[PingData]>` → `BehaviorSubject<[PingDataModel]>`
+3. Added `getPingDataModel()` helper method
+4. Converted all `.onNext()` calls to use models
+5. Removed Realm-specific `isInvalidated` checks
+6. Updated protocol and all consumers
+
+**Files Changed:**
+- `Windscribe/Models/PingData.swift` - Added `PingDataModel` struct
+- `Windscribe/Repository/Latency/LatencyRepository.swift` - Updated protocol
+- `Windscribe/Repository/Latency/LatencyRepositoryImpl.swift` - Implementation
+- `Windscribe/ViewControllers/MainViewController/Models/MainViewModel.swift` - Updated consumer
+
+### Mandatory Checklist for Realm Usage
+
+**Before storing ANY Realm object in memory, ask:**
+
+- [ ] ❓ Will this object be accessed from multiple threads?
+- [ ] ❓ Is this stored in a property, BehaviorSubject, or other long-lived storage?
+- [ ] ❓ Could this be accessed after async operations?
+
+**If YES to any → Use Model Pattern:**
+
+- [ ] ✅ Create a plain `struct` with `Model` suffix (e.g., `PingDataModel`)
+- [ ] ✅ Add `init(from: RealmObject)` to model
+- [ ] ✅ Add `convenience init(from: Model)` to Realm object (for reverse conversion)
+- [ ] ✅ Store models in BehaviorSubjects/properties, NOT Realm objects
+- [ ] ✅ Convert Realm → Model at storage boundaries (`.map { Model(from: $0) }`)
+- [ ] ✅ Update protocols and consumers to use Model type
+- [ ] ✅ Remove Realm-specific checks like `isInvalidated`
+
+### When NOT to Use Model Pattern
+
+**You can use Realm objects directly when:**
+- ✅ Accessing within a single synchronous function
+- ✅ Querying and immediately using the result
+- ✅ Inside a `DispatchQueue.main.sync/async` block that queries Realm
+
+```swift
+// ✅ OK - Synchronous, immediate use
+func getServerCount() -> Int {
+    return database.getAllServers().count
+}
+
+// ✅ OK - Query and use on same thread
+func displayServer(id: String) {
+    if let server = database.getServer(id: id) {
+        print(server.name)  // Immediate use
+    }
+}
+```
+
+### Common Mistakes to Avoid
+
+#### ❌ Mistake 1: Storing Realm Results
+```swift
+// BAD
+class MyRepository {
+    var servers: Results<Server>?  // Will crash across threads!
+}
+```
+
+#### ❌ Mistake 2: Passing Realm Objects Through Async
+```swift
+// BAD
+func loadData() async {
+    let data = database.getData()  // Realm object
+    await processData(data)  // Crash! Different execution context
+}
+```
+
+#### ❌ Mistake 3: Storing in Publishers/Subjects
+```swift
+// BAD
+let serverSubject = BehaviorSubject<Server>(value: nil)  // Realm object - wrong!
+```
+
+### Performance Considerations
+
+**Q: Won't copying data impact performance?**
+
+**A:** Minimal impact, major benefits:
+- ✅ Structs are lightweight value types
+- ✅ Only copying primitive values (String, Int, etc.)
+- ✅ Prevents crashes that are much more expensive
+- ✅ Enables proper caching without Realm constraints
+
+**Benchmark:** Converting 1000 `PingData` objects to `PingDataModel`: **< 1ms**
+
+### Future Development Guidelines
+
+**IMPORTANT:** This pattern is **MANDATORY** for all new features and refactors involving Realm.
+
+**When reviewing code, check for:**
+1. Realm objects stored in properties/subjects
+2. Realm objects returned from repository methods that store in memory
+3. Missing model conversion at storage boundaries
+4. Threading assumptions in Realm access
+
+**Pattern Name:** "Model Conversion Pattern" or "Thread-Safe Data Pattern"
+
+**Related Issues:**
+- Issue #904: Latency Realm threading crash
+- Commit cd5ece0f: Fix implementation example
+
+---
+
+## Refactoring Existing Realm Usage
+
+### ⚠️ TECHNICAL DEBT: Existing Violations
+
+**Many existing Realm objects in the codebase may violate this pattern and need refactoring.**
+
+### Identifying Violations
+
+**Search for these patterns in the codebase:**
+
+1. **BehaviorSubjects/Properties storing Realm objects:**
+```bash
+# Search for BehaviorSubject with Realm types
+grep -r "BehaviorSubject<.*\[.*\]>" --include="*.swift" | grep -E "(Server|Session|Notice|CustomConfig|StaticIP|Favourite|WifiNetwork)"
+```
+
+2. **Repository methods returning Realm objects for storage:**
+```swift
+// Look for methods like:
+var servers: BehaviorSubject<[Server]> { get }
+var customConfigs: BehaviorSubject<[CustomConfig]?> { get }
+var staticIPs: BehaviorSubject<[StaticIP]?> { get }
+```
+
+3. **Properties holding Realm objects:**
+```swift
+class SomeRepository {
+    var cachedServers: [Server] = []  // Potential violation
+    var currentSession: Session?      // Potential violation
+}
+```
+
+### Known Violations Requiring Refactoring
+
+**Common Realm types that likely need Model conversion:**
+
+- [ ] **Server** → `ServerModel`
+- [ ] **Session** → `SessionModel` (✅ Already done)
+- [ ] **StaticIP** → `StaticIPModel`
+- [ ] **CustomConfig** → `CustomConfigModel`
+- [ ] **Notice** → `NoticeModel`
+- [ ] **Favourite** → `FavouriteModel`
+- [ ] **WifiNetwork** → `WifiNetworkModel`
+- [ ] **MobilePlan** → `MobilePlanModel`
+- [ ] **PortMap** → `PortMapModel`
+
+### How to Request Refactoring
+
+**When you encounter potential violations:**
+
+1. **Identify the Realm type** being stored in memory
+2. **Request refactoring** using this prompt:
+
+```
+I found [RealmType] being stored in a BehaviorSubject/property in [FileName].
+Please refactor this to use the Model Pattern following the FeatureDevelopmentGuide.md
+Realm Threading Best Practices section.
+
+File: [path/to/file]
+Line: [line number]
+Realm Type: [RealmType]
+Storage: [BehaviorSubject/property/etc]
+```
+
+3. **Expected refactor steps:**
+   - Create `[RealmType]Model` struct in the Realm object file
+   - Update BehaviorSubject/property type
+   - Add conversion helper methods
+   - Update all storage points to convert
+   - Update protocol signatures
+   - Update consumers
+
+### Refactoring Priority
+
+**High Priority (Crash Risk):**
+- Any Realm types stored in subjects accessed from UI (table views, collection views)
+- Any Realm types passed through async/await boundaries
+- Any Realm types stored in ViewModels
+
+**Medium Priority (Potential Issues):**
+- Repository layer storing Realm objects
+- Manager classes caching Realm results
+
+**Low Priority (Safe for now):**
+- Synchronous, single-thread access only
+- Immediate query and use patterns
+
+### Example Refactoring Request
+
+```
+Refactor MainViewModel to use Model Pattern:
+
+File: Windscribe/ViewControllers/MainViewController/Models/MainViewModelImpl.swift
+Issue: Multiple BehaviorSubjects storing Realm objects:
+- Line 39: var servers = BehaviorSubject<[Server]>(value: [])
+- Line 40: var staticIPs = BehaviorSubject<[StaticIP]?>(value: nil)
+- Line 41: var customConfigs = BehaviorSubject<[CustomConfig]?>(value: nil)
+
+Please apply Model Pattern following FeatureDevelopmentGuide.md Realm Threading Best Practices.
+```
+
+### Gradual Migration Strategy
+
+**Don't refactor everything at once:**
+
+1. **Incident-Driven**: Fix violations when crashes occur
+2. **Feature-Driven**: Refactor when touching related code
+3. **Proactive**: Gradually refactor high-priority violations
+4. **Document**: Track refactored types in this guide
+
+**Updated List of Converted Types:**
+- ✅ `PingData` → `PingDataModel` (Issue #904, Commit cd5ece0f)
+- ✅ `Session` → `SessionModel` (Already existed)
+- ⏳ [Add more as they're converted]
+
+### Testing Refactored Code
+
+**After applying Model Pattern, verify:**
+
+1. App doesn't crash on startup
+2. Table views/collection views load data correctly
+3. No threading assertions in console
+4. Data updates propagate correctly
+5. All unit tests pass
+
+---
+
+**Remember:** This is technical debt that should be addressed gradually. Don't ignore violations, but prioritize based on crash risk and feature development needs.

@@ -1,0 +1,60 @@
+//
+//  RouteIDs.swift
+//  Windscribe
+//
+//  Created by Ginder Singh on 2023-12-13.
+//  Copyright © 2023 Windscribe. All rights reserved.
+//
+
+import Foundation
+
+enum RouteID {
+    // MARK: Main
+
+    case login
+    case signup(claimGhostAccount: Bool)
+    case home
+    case emergency
+    case mainMenu
+
+    // MARK: Preferences
+
+    case advanceParams
+    case help
+    case viewLog
+    case enterEmail
+    case confirmEmail
+    case general
+    case ghostAccount
+    case account
+    case robert
+    case lookFeel
+    case about
+    case shareWithFriends
+    case connection
+    case language
+    case networkSecurity
+    case network(with: WifiNetworkModel)
+    case submitTicket
+
+    // MARK: - Pop Up
+
+    case locationPermission
+    case shakeForDataPopUp
+    case upgrade(promoCode: String?, pcpID: String?)
+    case bannedAccountPopup
+    case outOfDataAccountPopup
+    case proPlanExpireddAccountPopup
+    case newsFeedPopup
+    case privacyView
+    case pushNotifications
+    case enterCredentials(config: CustomConfigModel, isUpdating: Bool)
+    case maintenanceLocation(isStaticIp: Bool)
+    case bridgeApi(type: BridgeApiPopupType)
+
+    // MARK: - Protocol Switch
+
+    case protocolSwitch(type: ProtocolFallbacksType, error: VPNConfigurationErrors?)
+    case protocolConnectionResult(protocolName: String, viewType: ProtocolViewType)
+    case protocolConnectionDebug
+}

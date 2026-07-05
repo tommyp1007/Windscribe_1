@@ -1,0 +1,247 @@
+//
+//  ListSelectionView.swift
+//  Windscribe
+//
+//  Created by Andre Fonseca on 01/05/2024.
+//  Copyright © 2024 Windscribe. All rights reserved.
+//
+
+import Foundation
+import UIKit
+import Combine
+
+private class ButtonImageView: UIView {
+    let button = UIButton()
+    let imageView = UIImageView()
+    private var cancellables = Set<AnyCancellable>()
+
+    convenience init(imageName: String, imageSize: CGFloat, tapAction: @escaping () -> Void) {
+        self.init(imageName: imageName, imageWidth: imageSize, imageHeight: imageSize, tapAction: tapAction)
+    }
+
+    init(imageName: String, imageWidth: CGFloat, imageHeight: CGFloat, tapAction: @escaping () -> Void) {
+        super.init(frame: .zero)
+        self.addSubview(imageView)
+        self.addSubview(button)
+
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        button.translatesAutoresizingMaskIntoConstraints = false
+        imageView.image = UIImage(named: imageName)
+        imageView.contentMode = .scaleAspectFill
+
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalTo: self.widthAnchor),
+            button.heightAnchor.constraint(equalTo: self.heightAnchor),
+            imageView.centerYAnchor.constraint(equalTo: self.centerYAnchor),
+            imageView.centerXAnchor.constraint(equalTo: self.centerXAnchor),
+            imageView.widthAnchor.constraint(equalToConstant: imageWidth),
+            imageView.heightAnchor.constraint(equalToConstant: imageHeight)
+        ])
+
+        button.tap
+            .sink { _ in
+                tapAction()
+            }
+            .store(in: &cancellables)
+    }
+
+    func setImage(_ image: UIImage?) {
+        imageView.image = image
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+class ListSelectionView: UIView {
+    var stackContainerView = UIStackView()
+    fileprivate lazy var allButton = ButtonImageView(imageName: ImagesAsset.Servers.serversAll, imageSize: 24, tapAction: viewModel.allSelected)
+    fileprivate lazy var favButton = ButtonImageView(imageName: ImagesAsset.favEmpty, imageSize: 24, tapAction: viewModel.favSelected)
+    fileprivate lazy var staticIpButton = ButtonImageView(imageName: ImagesAsset.Servers.staticIP, imageWidth: 18, imageHeight: 22, tapAction: viewModel.staticSelected)
+    fileprivate lazy var configButton = ButtonImageView(imageName: ImagesAsset.Servers.config, imageSize: 24, tapAction: viewModel.configSelected)
+    fileprivate lazy var startSearchButton = ButtonImageView(imageName: ImagesAsset.search, imageSize: 18, tapAction: viewModel.startSearchSelected)
+    var spacerView = UIView()
+    var gradientView = UIView()
+
+    var viewModel: ListSelectionViewModelType!
+
+    private var cancellables = Set<AnyCancellable>()
+
+    let viewHeight: CGFloat = 56
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    init() {
+        super.init(frame: .zero)
+    }
+
+    /// Tracks the last width used for the gradient so we only redraw on actual size changes.
+    private var lastGradientWidth: CGFloat = 0
+
+    func loadView() {
+        addViews()
+        addViewConstraints()
+        bindView()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.width > 0 && bounds.width != lastGradientWidth {
+            redrawGradientView()
+        }
+    }
+
+    func redrawGradientView() {
+        lastGradientWidth = bounds.width
+        gradientView.layer.sublayers = []
+        drawGradientView(with: getIsDarkMode())
+    }
+
+    private func drawGradientView(with isDarkMode: Bool) {
+        let gradient = CAGradientLayer()
+        gradient.colors = [
+            UIColor.from(.gradientStartColor, isDarkMode).cgColor,
+            UIColor.from(.gradientEndColor, isDarkMode).cgColor
+        ]
+        gradient.frame = CGRect(x: 0, y: 0, width: bounds.width + 2, height: viewHeight)
+        gradientView.layer.addSublayer(gradient)
+        gradientView.layer.cornerRadius = 24
+        gradientView.layer.maskedCorners = [.layerMaxXMinYCorner, .layerMinXMinYCorner]
+        gradientView.layer.masksToBounds = true
+        gradientView.layer.borderWidth = 1
+        gradientView.layer.borderColor = UIColor.from(.gradientBorderColor,
+                                                      isDarkMode).cgColor
+    }
+
+    private func addViews() {
+        stackContainerView.axis = .horizontal
+        stackContainerView.spacing = 16
+
+        gradientView.backgroundColor = .clear
+
+        addSubview(gradientView)
+        addSubview(stackContainerView)
+
+        stackContainerView.addArrangedSubviews([allButton, favButton, staticIpButton, configButton, spacerView, startSearchButton])
+
+    }
+
+    private func addViewConstraints() {
+        stackContainerView.translatesAutoresizingMaskIntoConstraints = false
+        allButton.translatesAutoresizingMaskIntoConstraints = false
+        favButton.translatesAutoresizingMaskIntoConstraints = false
+        staticIpButton.translatesAutoresizingMaskIntoConstraints = false
+        configButton.translatesAutoresizingMaskIntoConstraints = false
+        spacerView.translatesAutoresizingMaskIntoConstraints = false
+        startSearchButton.translatesAutoresizingMaskIntoConstraints = false
+        gradientView.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            // gradientView
+            gradientView.leftAnchor.constraint(equalTo: self.leftAnchor, constant: -1),
+            gradientView.rightAnchor.constraint(equalTo: self.rightAnchor, constant: 1),
+            gradientView.topAnchor.constraint(equalTo: self.topAnchor),
+            gradientView.bottomAnchor.constraint(equalTo: self.bottomAnchor),
+
+            // stackContainerView
+            stackContainerView.centerYAnchor.constraint(equalTo: self.centerYAnchor),
+            stackContainerView.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 12),
+            stackContainerView.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -12),
+            stackContainerView.heightAnchor.constraint(equalTo: self.heightAnchor),
+
+            // allButton
+            allButton.widthAnchor.constraint(equalToConstant: 32),
+
+            // favButton
+            favButton.widthAnchor.constraint(equalToConstant: 32),
+
+            // staticIpButton
+            staticIpButton.widthAnchor.constraint(equalToConstant: 32),
+
+            // configButton
+            configButton.widthAnchor.constraint(equalToConstant: 32),
+
+            // startSearchButton
+            startSearchButton.widthAnchor.constraint(equalToConstant: 40)
+        ])
+    }
+
+    private func showPresentingListIcon(cardButtonType: CardHeaderButtonType) {
+        UIView.animate(withDuration: 0.2) {
+            self.allButton.imageView.image = UIImage(named: cardButtonType == .all ?
+                                                     ImagesAsset.Servers.allSelected : ImagesAsset.Servers.serversAll)
+            self.favButton.imageView.image = UIImage(named: cardButtonType == .fav ?
+                                                     ImagesAsset.favFull : ImagesAsset.favEmpty)
+            self.staticIpButton.imageView.image = UIImage(named: cardButtonType == .staticIP ?
+                                                          ImagesAsset.Servers.staticIPSelected : ImagesAsset.Servers.staticIP)
+            self.configButton.imageView.image = UIImage(named: cardButtonType == .config ?
+                                                        ImagesAsset.Servers.configSelected : ImagesAsset.Servers.config)
+
+            self.updateIconsTheme(with: self.getIsDarkMode())
+
+            self.allButton.imageView.layer.opacity = cardButtonType == .all ? 1.0 : 0.7
+            self.favButton.imageView.layer.opacity = cardButtonType == .fav ? 1.0 : 0.7
+            self.staticIpButton.imageView.layer.opacity = cardButtonType == .staticIP ? 1.0 : 0.7
+            self.configButton.imageView.layer.opacity = cardButtonType == .config ? 1.0 : 0.7
+            self.startSearchButton.imageView.layer.opacity = 0.7
+        }
+    }
+
+    private func bindView() {
+        viewModel.isActive
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isActive in
+                self?.stackContainerView.isHidden = !isActive
+                self?.isUserInteractionEnabled = isActive
+            }
+            .store(in: &cancellables)
+
+        viewModel.selectedAction
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] cardButtonType in
+                self?.showPresentingListIcon(cardButtonType: cardButtonType)
+            }
+            .store(in: &cancellables)
+
+        viewModel.isDarkMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isDarkMode in
+                self?.updateTheme(with: isDarkMode)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func updateTheme(with isDarkMode: Bool) {
+        updateIconsTheme(with: isDarkMode)
+        redrawGradientView()
+    }
+
+    private func updateIconsTheme(with isDarkMode: Bool) {
+        [allButton, favButton, staticIpButton, configButton, startSearchButton]
+            .forEach {
+                $0.imageView.setImageColor(color: .from(.iconColor, isDarkMode))
+            }
+    }
+
+    private func getIsDarkMode() -> Bool {
+        return viewModel.isDarkMode.value
+    }
+
+    func animateFavoriteButton() {
+        // Animate the favorite button with grow/shrink effect
+        let growScale: CGFloat = 1.3
+        let animationDuration: TimeInterval = 0.15
+
+        UIView.animate(withDuration: animationDuration, animations: { [weak self] in
+            self?.favButton.imageView.transform = CGAffineTransform(scaleX: growScale, y: growScale)
+        }, completion: { [weak self] _ in
+            UIView.animate(withDuration: animationDuration, animations: {
+                self?.favButton.imageView.transform = .identity
+            })
+        })
+    }
+}

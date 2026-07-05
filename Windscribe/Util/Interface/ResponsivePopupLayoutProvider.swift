@@ -1,0 +1,47 @@
+//
+//  PopupLayoutHelper.swift
+//  Windscribe
+//
+//  Created by Soner Yuksel on 2025-07-10.
+//  Copyright © 2025 Windscribe. All rights reserved.
+//
+
+import Foundation
+import SwiftUI
+
+protocol ResponsivePopupLayoutProvider {
+    var maxWidth: CGFloat { get }
+    func getMaxWidth(for geometry: GeometryProxy) -> CGFloat
+    func getBottomPadding(for geometry: GeometryProxy, deviceType: DeviceType) -> CGFloat
+    func getTopSpacerHeight(for geometry: GeometryProxy, deviceType: DeviceType) -> CGFloat
+}
+
+extension ResponsivePopupLayoutProvider {
+    var maxWidth: CGFloat { 450 }
+
+    func getMaxWidth(for geometry: GeometryProxy) -> CGFloat {
+        min(geometry.size.width, maxWidth)
+    }
+
+    func getBottomPadding(for geometry: GeometryProxy, deviceType: DeviceType) -> CGFloat {
+        switch deviceType {
+        case .iPadPortrait:
+            return geometry.size.height * 0.24
+        case .iPadLandscape:
+            return geometry.size.height * 0.06
+        default:
+            return 12
+        }
+    }
+
+    func getTopSpacerHeight(for geometry: GeometryProxy, deviceType: DeviceType) -> CGFloat {
+        switch deviceType {
+        case .iPadPortrait:
+            return geometry.size.height * 0.24
+        case .iPadLandscape:
+            return geometry.size.height * 0.18
+        default:
+            return geometry.size.height * 0.12
+        }
+    }
+}

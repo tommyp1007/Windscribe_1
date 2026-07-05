@@ -1,0 +1,46 @@
+//
+//  PrivacyPopUpViewController.swift
+//  WindscribeTV
+//
+//  Created by Andre Fonseca on 03/09/2024.
+//  Copyright © 2024 Windscribe. All rights reserved.
+//
+
+import Combine
+import UIKit
+
+class PrivacyPopUpViewController: BasePopUpViewController {
+    var privacyViewModel: PrivacyViewModelType!
+    var button = WSPillButton()
+    var closeCompletion: (() -> Void)?
+    private var cancellables = Set<AnyCancellable>()
+
+    // MARK: Overrides
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        logger.logD("PrivacyPopUpViewController", "Displaying Privacy Popup View")
+        bindViews()
+    }
+
+    // MARK: Setting up
+
+    override func setup() {
+        super.setup()
+        button.setTitle(TextsAsset.PrivacyView.action, for: .normal)
+        button.setup(withHeight: 82)
+        mainStackView.addArrangedSubview(button)
+        titleLabel?.text = ""
+        bodyLabel.font = UIFont.regular(size: 25)
+    }
+
+    private func bindViews() {
+        button.wasSelected
+            .sink { [self] _ in
+                logger.logD("PrivacyPopUpViewController", "User tapped to accept privacy conditions.")
+                self.privacyViewModel.action { self.closeCompletion?() }
+                self.navigationController?.popViewController(animated: true)
+            }
+            .store(in: &cancellables)
+    }
+}

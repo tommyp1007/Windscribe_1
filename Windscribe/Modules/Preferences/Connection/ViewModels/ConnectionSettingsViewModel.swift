@@ -1,0 +1,293 @@
+//
+//  ConnectionSettingsViewModel.swift
+//  Windscribe
+//
+//  Created by Soner Yuksel on 2025-05-08.
+//  Copyright © 2025 Windscribe. All rights reserved.
+//
+
+import Foundation
+import Combine
+import UserNotifications
+import UIKit
+
+protocol ConnectionSettingsViewModel: PreferencesBaseViewModel {
+    var entries: [ConnectionsEntryType] { get set }
+    var safariURL: URL? { get }
+    var router: ConnectionsNavigationRouter { get }
+
+    func entrySelected(_ entry: ConnectionsEntryType, action: MenuEntryActionResponseType)
+}
+
+class ConnectionSettingsViewModelImpl: PreferencesBaseViewModelImpl, ConnectionSettingsViewModel {
+    @Published var entries: [ConnectionsEntryType] = []
+    @Published var safariURL: URL?
+    @Published var router: ConnectionsNavigationRouter
+
+    private var currentProtocol = DefaultValues.protocol
+    private var currentPort = DefaultValues.port
+    private var killSwitchSelected = DefaultValues.killSwitch
+    private var allowLanSelected = DefaultValues.allowLANMode
+
+    private var connectionMode = DefaultValues.connectionMode
+    private var connectedDNS = DefaultValues.connectedDNS
+
+    private var egressProtocol = DefaultValues.ipStack
+    private var ingressProtocol = DefaultValues.ipStack
+
+    // MARK: - Dependencies
+    private let preferences: Preferences
+    private let protocolManager: ProtocolManagerType
+    private let dnsSettingsManager: DNSSettingsManagerType
+    private let portMapRepository: PortMapRepository
+
+    init(logger: FileLogger,
+         lookAndFeelRepository: LookAndFeelRepositoryType,
+         hapticFeedbackManager: HapticFeedbackManager,
+         preferences: Preferences,
+         router: ConnectionsNavigationRouter,
+         protocolManager: ProtocolManagerType,
+         dnsSettingsManager: DNSSettingsManagerType,
+         portMapRepository: PortMapRepository) {
+        self.preferences = preferences
+        self.router = router
+        self.protocolManager = protocolManager
+        self.dnsSettingsManager = dnsSettingsManager
+        self.portMapRepository = portMapRepository
+
+        super.init(logger: logger,
+                   lookAndFeelRepository: lookAndFeelRepository,
+                   hapticFeedbackManager: hapticFeedbackManager)
+    }
+
+    override func bindSubjects() {
+        super.bindSubjects()
+
+        preferences.getSelectedProtocol()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] preferredProtocol in
+                guard let self = self else { return }
+                self.currentProtocol = preferredProtocol ?? DefaultValues.protocol
+                self.reloadItems()
+            }
+            .store(in: &cancellables)
+
+        preferences.getSelectedPort()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] port in
+                guard let self = self else { return }
+                self.currentPort = port ?? DefaultValues.port
+                self.reloadItems()
+            }
+            .store(in: &cancellables)
+
+        preferences.getKillSwitch()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                guard let self = self else { return }
+                self.killSwitchSelected = enabled ?? DefaultValues.killSwitch
+                self.reloadItems()
+            }
+            .store(in: &cancellables)
+
+        preferences.getAllowLAN()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                guard let self = self else { return }
+                self.allowLanSelected = enabled ?? DefaultValues.allowLANMode
+                self.reloadItems()
+            }
+            .store(in: &cancellables)
+
+        preferences.getConnectionMode()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self = self else { return }
+                self.connectionMode = (mode ?? DefaultValues.connectionMode).localized
+                self.reloadItems()
+            }
+            .store(in: &cancellables)
+
+        preferences.getConnectedDNSObservable()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self = self else { return }
+                self.connectedDNS = (mode ?? DefaultValues.connectedDNS).localized
+                self.reloadItems()
+            }
+            .store(in: &cancellables)
+
+        preferences.getEgressProtocolPreference()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] preference in
+                guard let self = self else { return }
+                self.egressProtocol = preference ?? DefaultValues.ipStack
+                self.reloadItems()
+            }
+            .store(in: &cancellables)
+
+        preferences.getIngressProtocolPreference()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] preference in
+                guard let self = self else { return }
+                self.ingressProtocol = preference ?? DefaultValues.ipStack
+            }
+            .store(in: &cancellables)
+    }
+
+    override func reloadItems() {
+        let customDNSValue = preferences.getCustomDNSValue().value
+        let connectionModes = zip(TextsAsset.connectionModes,
+                                  Fields.connectionModes)
+            .map { MenuOption(title: $0, fieldKey: $1) }
+        let connectedDNSOptions = zip(TextsAsset.connectedDNSOptions,
+                                      Fields.connectedDNSOptions)
+            .map { MenuOption(title: $0, fieldKey: $1) }
+
+        let protocolOptions = getProtocols()
+            .map { MenuOption(title: $0, fieldKey: $0) }
+        let portOptions = getPorts(by: currentProtocol)
+            .map { MenuOption(title: $0, fieldKey: $0) }
+
+        let ipStackOptions = zip(TextsAsset.ipStackOptions, Fields.ipStackOptions)
+            .map { MenuOption(title: $0, fieldKey: $1) }
+
+        entries = [
+            .networkOptions,
+            .antiCensorshipOptions,
+            .connectionMode(currentOption: connectionMode,
+                            options: connectionModes,
+                            protocolSelected: currentProtocol,
+                            protocolOptions: protocolOptions,
+                            portSelected: currentPort,
+                            portOptions: portOptions),
+            .ipStack(selectedEgressOption: egressProtocol, egressOptions: ipStackOptions, selectedIngressOption: ingressProtocol, ingressOptions: ipStackOptions)
+        ]
+        if currentProtocol != VPNProtocolType.iKEv2.identifier || connectionMode == Fields.Values.auto {
+            entries.append(.connectedDns(currentOption: connectedDNS,
+                                         customValue: customDNSValue,
+                                         options: connectedDNSOptions))
+        }
+
+        entries.append(contentsOf: [.alwaysOn(isSelected: killSwitchSelected),
+                                    .allowLan(isSelected: allowLanSelected)
+        ])
+    }
+
+    func entrySelected(_ entry: ConnectionsEntryType, action: MenuEntryActionResponseType) {
+        actionSelected(action)
+
+        switch entry {
+        case .networkOptions:
+            if case .button = action {
+                networkOptionsSelected()
+            }
+            if case .infoLink = action {
+                openLink(.networkOptions)
+            }
+        case .connectionMode:
+            if case .multiple(let currentOption, let parentId) = action {
+                if parentId == ConnectionSecondaryEntryIDs.protocolMenu.id {
+                    updateProtocol(value: currentOption)
+                } else if parentId == ConnectionSecondaryEntryIDs.portMenu.id {
+                    updatePort(value: currentOption)
+                } else {
+                    preferences.saveConnectionMode(mode: currentOption)
+                }
+            }
+            if case .infoLink = action {
+                openLink(.connectionModes)
+            }
+        case .connectedDns:
+            if case .multiple(let currentOption, _) = action {
+                preferences.saveConnectedDNS(mode: currentOption)
+            }
+            if case .infoLink = action {
+                openLink(.connectedDNS)
+            }
+            if case .field(let value, _) = action {
+                saveConnectedDNSValue(value: value)
+            }
+        case .alwaysOn:
+            if case .toggle(let isSelected, _) = action {
+                preferences.saveKillSwitch(killSwitch: isSelected)
+            }
+        case .allowLan:
+            if case .toggle(let isSelected, _) = action {
+                preferences.saveAllowLane(mode: isSelected)
+            }
+            if case .infoLink = action {
+                openLink(.allowLan)
+            }
+        case .antiCensorshipOptions:
+            if case .button = action {
+                antiCensorshipOptionsSelected()
+            }
+        case .ipStack:
+            if case .infoLink = action {
+                openLink(.networkOptions)
+            }
+            if case let .multiple(currentOption, parentId) = action {
+                if parentId == ConnectionSecondaryEntryIDs.ipStackEgressMenu.id {
+                    preferences.saveEgressProtocolPreference(value: currentOption)
+                } else if parentId == ConnectionSecondaryEntryIDs.ipStackIngressMenu.id {
+                    preferences.saveIngressProtocolPreference(value: currentOption)
+                }
+            }
+        }
+    }
+
+    private func networkOptionsSelected() {
+        router.navigate(to: .networkOptions)
+    }
+
+    private func antiCensorshipOptionsSelected() {
+        router.navigate(to: .antiCensorshipOptions)
+    }
+
+    private func openLink(_ linkType: FeatureExplainer) {
+        safariURL = URL(string: linkType.getUrl())
+    }
+
+    private func getPorts(by protocolType: String) -> [String] {
+        guard let portsArray = portMapRepository.getPorts(protocolType: protocolType) else { return [] }
+        return portsArray
+    }
+
+    private func getProtocols() -> [String] {
+        return TextsAsset.General.protocols
+    }
+
+    private func updateConnectionMode(value: String) {
+        preferences.saveConnectionMode(mode: value)
+    }
+
+    private func updateProtocol(value: String) {
+        preferences.saveSelectedProtocol(selectedProtocol: value)
+        if let port = portMapRepository.getPorts(protocolType: value) {
+            preferences.saveSelectedPort(port: port[0])
+        }
+    }
+
+    private func updatePort(value: String) {
+        preferences.saveSelectedPort(port: value)
+    }
+
+    private func saveConnectedDNSValue(value: String) {
+        // Handle empty string (X button clicked) - reset to default empty DNS
+        if value.isEmpty {
+            self.preferences.saveCustomDNSValue(value: DefaultValues.customDNSValue)
+            self.reloadItems()
+            return
+        }
+
+        dnsSettingsManager.getDNSValue(from: value, opensURL: UIApplication.shared, completionDNS: { dnsValue in
+            guard let dnsValue = dnsValue,
+                  !dnsValue.servers.isEmpty else {
+                return
+            }
+            self.preferences.saveCustomDNSValue(value: dnsValue)
+            self.reloadItems()
+        }, completion: { _ in })
+    }
+}

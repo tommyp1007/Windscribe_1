@@ -1,0 +1,82 @@
+//
+//  MainViewController+LifeCycle.swift
+//  Windscribe
+//
+//  Created by Thomas on 23/11/2021.
+//  Copyright © 2021 Windscribe. All rights reserved.
+//
+
+import CoreLocation
+import Foundation
+import Swinject
+import UIKit
+
+extension MainViewController {
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        logger.logD("MainViewController", "Main view loaded. Preparing layout.")
+        addViews()
+        addCardHeaderView()
+        addSearchViews()
+        addAutoLayoutConstraints()
+        checkPrivacyConfirmation()
+        loadPortMap()
+        loadServerList()
+        loadStaticIPs()
+        loadCustomConfigs()
+        sessionManager.setSessionTimer()
+        sessionManager.listenForSessionChanges()
+        setupIntentsForSiri()
+        configureNotificationListeners()
+        loadLatencyWhenReady()
+        overrideUserInterfaceStyle = .dark
+        bindViewModels()
+
+        // Ensure best location is selected immediately on first login
+        if userJustLoggedIn {
+            logger.logD("MainViewController", "User just logged in - configuring best location immediately.")
+            configureBestLocation()
+        }
+
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationWillEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
+
+        locationPermissionManager.shouldShowPermissionUI
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.router?.routeTo(
+                    to: .locationPermission,
+                    from: self
+                )
+            }
+            .store(in: &cancellables)
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        overrideUserInterfaceStyle = .dark
+        viewModel.updateSSID()
+        checkForInternetConnection()
+        navigationController?.isNavigationBarHidden = true
+        navigationController?.interactivePopGestureRecognizer?.delegate = self
+        restartServerRefreshControl()
+        flagBackgroundView.redraw()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        searchLocationsView.viewModel.dismiss()
+    }
+
+    private func bindViewModels() {
+        bindMainViewModel()
+        bindCustomConfigPickerModel()
+        bindVPNConnectionsViewModel()
+        bindFavouriteListViewModel()
+        bindStaticIPListViewModel()
+        bindServerListViewModel()
+        bindActions()
+        bindViews()
+        bindLatencyViewModel()
+    }
+}

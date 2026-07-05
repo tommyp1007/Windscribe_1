@@ -1,0 +1,22 @@
+//
+//  AppReviewManaging.swift
+//  Windscribe
+//
+//  Created by Soner Yuksel on 2025-03-12.
+//  Copyright © 2025 Windscribe. All rights reserved.
+//
+
+import Foundation
+import Combine
+
+protocol AppReviewManaging {
+    var preferences: Preferences { get }
+    var logger: FileLogger { get }
+
+    var reviewRequestTrigger: PassthroughSubject<Void, Never> { get }
+
+    func requestReviewIfAvailable(session: SessionModel?)
+    func promptReviewWithConfirmation()
+    func openAppStoreForReview()
+    func shouldShowReviewRequest(session: SessionModel?) -> Bool
+}

@@ -1,0 +1,128 @@
+default_platform(:ios)
+
+require 'base64'
+
+APP_IDENTIFIERS = [
+  "com.windscribe",
+  "com.windscribe.PacketTunnel",
+  "com.windscribe.WireGuardTunnel",
+  "com.windscribe.SiriIntents",
+  "com.windscribe.HomeWidget"
+]
+
+def ci_api_key
+  app_store_connect_api_key(
+    key_id: ENV["UPLOAD_KEY_ID"],
+    issuer_id: ENV["UPLOAD_ISSUER_ID"],
+    key_content: Base64.decode64(ENV["UPLOAD_KEY"])
+  )
+end
+
+def ci_build(scheme:, sign: false, build_number: nil)
+  xcargs = build_number ? "CURRENT_PROJECT_VERSION=#{build_number}" : nil
+
+  if sign
+    setup_ci
+
+    match(
+      type: "appstore",
+      app_identifier: APP_IDENTIFIERS,
+      storage_mode: "gitlab_secure_files",
+      readonly: true
+    )
+
+    # Switch to manual signing and assign match profiles to each target
+    target_profiles = {
+      "Windscribe" => "com.windscribe",
+      "PacketTunnel" => "com.windscribe.PacketTunnel",
+      "WireGuardTunnel" => "com.windscribe.WireGuardTunnel",
+      "SiriIntents" => "com.windscribe.SiriIntents",
+      "HomeWidgetExtension" => "com.windscribe.HomeWidget"
+    }
+
+    target_profiles.each do |target, app_id|
+      profile_name = ENV["sigh_#{app_id}_appstore_profile-name"]
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path: "Windscribe.xcodeproj",
+        team_id: "GYZJYS7XUG",
+        targets: [target],
+        profile_name: profile_name,
+        code_sign_identity: "Apple Distribution"
+      )
+    end
+
+    gym(
+      scheme: scheme,
+      project: "Windscribe.xcodeproj",
+      export_method: "app-store",
+      export_options: "./exportOptions.plist",
+      clean: true,
+      output_directory: "build_logs",
+      xcargs: xcargs
+    )
+  else
+    gym(
+      scheme: scheme,
+      project: "Windscribe.xcodeproj",
+      skip_codesigning: true,
+      skip_archive: true,
+      clean: true,
+      output_directory: "build_logs",
+      xcargs: xcargs
+    )
+  end
+end
+
+desc "Runs linter"
+lane :lint do
+    swiftlint
+end
+
+desc "Runs tests"
+lane :test do
+  scan(
+    project: "Windscribe.xcodeproj",
+    device: "iPhone 16 Pro",
+    scheme: "WindscribeTests",
+    clean: true,
+    fail_build: true,
+    output_directory: "test_logs",
+    output_types: "junit"
+  )
+end
+
+desc "Build the iOS app"
+lane :iOSBuild do
+  ci_build(scheme: "Windscribe-Debug")
+end
+
+desc "Build the tvOS app"
+lane :tvBuild do
+  ci_build(scheme: "WindscribeTV-Debug")
+end
+
+desc "Push build to TestFlight (scheme controlled by BUILD_SCHEME env var)"
+lane :iOSTestFlight do
+  scheme = ENV["BUILD_SCHEME"] || "Windscribe-Release"
+  ci_api_key
+
+  # Resolve build number without mutating project.pbxproj. Prefer the GitLab
+  # pipeline IID (monotonic per project); fall back to TestFlight latest + 1.
+  build_number = ENV["CI_PIPELINE_IID"] || (
+    latest_testflight_build_number(app_identifier: "com.windscribe", initial_build_number: 1) + 1
+  ).to_s
+
+  ci_build(scheme: scheme, sign: true, build_number: build_number)
+
+  upload_to_testflight(
+    skip_waiting_for_build_processing: true,
+    distribute_external: false
+  )
+
+  # Grep anchor for Codescribe's QA-handoff automation. Must come after a
+  # successful TestFlight upload; format is parsed downstream — do not change.
+  config_path = File.expand_path("../Windscribe/Environments/Config.xcconfig", __dir__)
+  marketing_version = File.read(config_path).match(/^MARKETING_VERSION\s*=\s*(\S+)/)[1]
+  puts "[DEPLOY_INFO] version=#{marketing_version} build=#{build_number}"
+end

@@ -1,0 +1,56 @@
+//
+//  GetMoreDataPopupViewController.swift
+//  WindscribeTV
+//
+//  Created by Andre Fonseca on 20/08/2024.
+//  Copyright © 2024 Windscribe. All rights reserved.
+//
+
+import Combine
+import UIKit
+
+class GetMoreDataPopupViewController: BasePopUpViewController {
+    var router: HomeRouter!
+    var signupRouter: SignupRouter!
+
+    var signUpButton = WSPillButton()
+    var getProButton = WSPillButton()
+    private var cancellables = Set<AnyCancellable>()
+
+    // MARK: Overrides
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        logger.logD("GetMoreDataPopupViewController", "Displaying Get More Data View")
+        bindViews()
+    }
+
+    // MARK: Setting up
+
+    override func setup() {
+        super.setup()
+        signUpButton.setTitle(TextsAsset.signUp, for: .normal)
+        getProButton.setTitle("Get Pro - Unlimited".uppercased(), for: .normal)
+
+        for roundbutton in [signUpButton, getProButton] {
+            roundbutton.setup(withHeight: 96.0)
+            mainStackView.addArrangedSubview(roundbutton)
+        }
+        mainStackView.addArrangedSubview(UIView())
+    }
+
+    private func bindViews() {
+        signUpButton.wasSelected
+            .sink { [self] _ in
+                logger.logD("GetMoreDataPopupViewController", "Signup button pressed")
+                signupRouter.routeTo(to: .signup(claimGhostAccount: false), from: self)
+            }
+            .store(in: &cancellables)
+        getProButton.wasSelected
+            .sink { [self] _ in
+                logger.logD("GetMoreDataPopupViewController", "Get Pro button pressed")
+                router.routeTo(to: .upgrade(promoCode: nil, pcpID: nil), from: self)
+            }
+            .store(in: &cancellables)
+    }
+}

@@ -1,0 +1,17 @@
+{
+  "images" : [
+    {
+      "filename" : "welcome-background 1.pdf",
+      "idiom" : "universal"
+    },
+    {
+      "filename" : "welcome-background.pdf",
+      "idiom" : "universal",
+      "width-class" : "compact"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

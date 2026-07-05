@@ -1,0 +1,312 @@
+//
+//  MainViewController.swift
+//  Windscribe
+//
+//  Created by Yalcin on 2018-11-29.
+//  Copyright © 2018 Windscribe. All rights reserved.
+//
+
+import CoreLocation
+import ExpyTableView
+import MobileCoreServices
+import NetworkExtension
+import RealmSwift
+import SafariServices
+import StoreKit
+import Swinject
+import UIKit
+import WidgetKit
+import Combine
+
+class MainViewController: WSUIViewController, UIGestureRecognizerDelegate {
+    var preferencesTapAreaButton: LargeTapAreaImageButton!
+    var notificationsTapAreaButton: UIButton!
+    var logoStackView: UIStackView!
+    var logoIcon: ImageButton!
+    var proIcon: ImageButton!
+
+    var notificationDot: UIButton!
+
+    // MARK: background views
+    var flagBackgroundView: FlagsBackgroundView!
+
+    // MARK: table views
+    var scrollView: WSScrollView!
+    var favTableViewRefreshControl, staticIpTableViewRefreshControl, customConfigsTableViewRefreshControl: WSRefreshControl!
+    var locationsListTableView: PlainExpyTableView!
+    var favTableView, staticIpTableView, customConfigTableView: PlainTableView!
+    var staticIPTableViewFooterView: StaticIPListFooterView!
+    var customConfigTableViewFooterView: CustomConfigListFooterView!
+    var freeAccountViewFooterView: FreeAccountFooterView!
+
+    var serverHeaderView: ServerInfoView!
+
+    var listSelectionView: ListSelectionView!
+    // search
+    var searchLocationsView: SearchLocationsView!
+
+    var sortedlocationList: [LocationSection]?
+
+    // MARK: connection views
+    var connectButtonView: ConnectButtonView!
+    var connectionStateInfoView: ConnectionStateInfoView!
+    var spacer: UIView!
+    var locationNameView: LocationNameView!
+    var ipInfoView: IPInfoView!
+
+    // MARK: Wifi Info views
+    var wifiInfoView: WifiInfoView!
+
+    // MARK: datasources
+    var locationsListTableViewDataSource: LocationsListTableViewDataSource!
+    var favoriteListTableViewDataSource: FavouriteListTableViewDataSource!
+    var staticIPListTableViewDataSource: StaticIPListTableViewDataSource!
+    var customConfigListTableViewDataSource: CustomConfigListTableViewDataSource!
+
+    // MARK: properties
+
+    var appJustStarted = false
+    var userJustLoggedIn = false
+    var didShowBannedProfilePopup = false
+    var didShowOutOfDataPopup = false
+    var didShowProPlanExpiredPopup = false
+    var isLoadingLatencyValues = false
+    var isRefreshing = false
+    var internetConnectionLost = false
+    var selectedNextProtocol: String?
+    var didCheckForGhostAccount = false
+    let userDefaults = UserDefaults.standard
+    var isServerListLoading: Bool = false
+
+    // MARK: Server section
+
+    let locationSectionOpacity: Float = 1
+
+    // MARK: shake for data trigger
+
+    var shakeDetected = 0
+    var firstShakeTimestamp = Date().timeIntervalSince1970
+    var lastShakeTimestamp = Date().timeIntervalSince1970
+
+    // MARK: realm tokens
+
+    var serverListNotificationToken: NotificationToken?
+    var favListNotificationToken: NotificationToken?
+    var staticIPListNotificationToken: NotificationToken?
+    var customConfigNotificationToken: NotificationToken?
+    var sessionNotificationToken: NotificationToken?
+    var bestLocationNotificationToken: NotificationToken?
+    var notificationToken: NotificationToken?
+
+    // MARK: Timers
+    var autoModeSelectorViewTimer: Timer?
+    var notificationTimer: Timer?
+    var expandedSections: [Int: Bool]?
+    var selectedHeaderViewTab: CardHeaderButtonType?
+    var lastSelectedHeaderViewTab: CardHeaderButtonType?
+
+    var router: HomeRouter?
+    var accountRouter: AccountRouter?
+    var popupRouter: PopupRouter?
+    var pushNotificationManager: PushNotificationManager?
+
+    // MARK: View Models
+    var viewModel: MainViewModel!
+    var vpnConnectionViewModel: ConnectionViewModelType!
+    var customConfigPickerViewModel: CustomConfigPickerViewModelType!
+    var favNodesListViewModel: FavouriteListViewModelType!
+    var staticIPListViewModel: StaticIPListViewModelType!
+    var serverListViewModel: ServerListViewModelType!
+    var latencyViewModel: LatencyViewModel!
+
+    // MARK: Managers
+    var soundManager: SoundManaging!
+    var locationPermissionManager: LocationPermissionManaging!
+    var referAndShareManager: ReferAndShareManager!
+    var logger: FileLogger!
+
+    // MARK: constraints
+    var listSelectionViewTopConstraint: NSLayoutConstraint!
+    var listSelectionViewBottomConstraint: NSLayoutConstraint!
+
+    var displayingNetwork: WifiNetworkModel? {
+        return viewModel.wifiNetwork.value
+    }
+
+    lazy var locationsListTableViewRefreshControl: WSRefreshControl = {
+        let refreshControl = WSRefreshControl(isDarkMode: viewModel.isDarkMode)
+        refreshControl.addTarget(self, action: #selector(serverRefreshControlValueChanged), for: .valueChanged)
+        refreshControl.backView = RefreshControlBackView(frame: refreshControl.bounds)
+        return refreshControl
+    }()
+
+    var customConfigRepository: CustomConfigRepository?
+
+    // Debounced table reload trigger
+    let reloadTableViewsTrigger = PassthroughSubject<Void, Never>()
+
+    func gestureRecognizerShouldBegin(_: UIGestureRecognizer) -> Bool {
+        return false
+    }
+
+    func configureNotificationListeners() {
+        NotificationCenter.default.publisher(for: Notifications.popoverDismissed)
+            .sink { [weak self] _ in self?.popoverDismissed() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.serverListOrderPrefChanged)
+            .sink { [weak self] _ in self?.reloadServerListOrder() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.reloadTableViews)
+            .sink { [weak self] _ in self?.reloadTableViews() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.reachabilityChanged)
+            .sink { [weak self] _ in self?.reachabilityChanged() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.checkForNotifications)
+            .sink { [weak self] _ in self?.checkForUnreadNotifications() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.disconnectVPN)
+            .sink { [weak self] _ in self?.disconnectVPNIntentReceived() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.connectToVPN)
+            .sink { [weak self] _ in self?.connectVPNIntentReceived() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.showCustomConfigTab)
+            .sink { [weak self] _ in self?.showCustomConfigTab() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: Notifications.configureVPN)
+            .sink { [weak self] _ in self?.enableVPNConnection() }
+            .store(in: &cancellables)
+
+        // Debounced table reload: coalesces multiple rapid reload calls into single reload
+        reloadTableViewsTrigger
+            .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.performTableReload()
+            }
+            .store(in: &cancellables)
+    }
+
+    func checkForInternetConnection() {
+        func canCheckInternetConnection() -> Bool {
+            vpnConnectionViewModel.isConnected() && !vpnConnectionViewModel.isProtocolSwitchInProgress()
+        }
+        guard canCheckInternetConnection() else { return }
+        Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard canCheckInternetConnection() else { return }
+            let isOnline: Bool = viewModel.appNetwork.value.status == .connected
+            if !isOnline {
+                logger.logI("MainViewController", "No internet connection available.")
+                internetConnectionLost = true
+                vpnConnectionViewModel.disableConnection()
+            }
+        }
+    }
+
+    func showNotificationsViewController() {
+        popupRouter?.routeTo(to: RouteID.newsFeedPopup, from: self)
+    }
+
+    func checkPrivacyConfirmation() {
+        if !viewModel.isPrivacyPopupAccepted() {
+            showPrivacyConfirmationPopup()
+        }
+    }
+
+    func showPrivacyConfirmationPopup(willConnectOnAccepting: Bool = false) {
+        if willConnectOnAccepting {
+            // Observe privacy acceptance through the state manager
+            vpnConnectionViewModel.checkForPrivacyConsent()
+        }
+
+        popupRouter?.routeTo(to: .privacyView, from: self)
+    }
+
+    func showUpgradeView() {
+        accountRouter?.routeTo(to: RouteID.upgrade(promoCode: nil, pcpID: nil), from: self)
+    }
+
+    func showMaintenanceLocationView(isStaticIp: Bool = false) {
+        popupRouter?.routeTo(to: .maintenanceLocation(isStaticIp: isStaticIp), from: self)
+    }
+
+    func configureBestLocation(selectBestLocation: Bool = false, connectToBestLocation: Bool = false) {
+        if let bestLocation = vpnConnectionViewModel.getBestLocation() {
+            let locationId = "\(bestLocation.datacenterId)"
+            logger.logD("MainViewController", "Configuring best location.")
+            if selectBestLocation || noSelectedNodeToConnect() || userJustLoggedIn {
+                vpnConnectionViewModel.selectBestLocation(with: locationId)
+                if userJustLoggedIn {
+                    logger.logD("MainViewController", "Selecting best location after user login.")
+                    userJustLoggedIn = false
+                }
+            }
+            if connectToBestLocation {
+                logger.logD("MainViewController", "Forcing to connect to best location.")
+                enableVPNConnection()
+            }
+            guard let displayingDatacenter = self.viewModel.locationsList.value
+                .flatMap({ $0.datacenters }).filter({ $0.id == bestLocation.datacenterId }).first else { return }
+            let isGroupProOnly = displayingDatacenter.isPremiumOnly
+
+            if let isUserPro = viewModel.sessionModel.value?.isPremium,
+               vpnConnectionViewModel.isDisconnected(),
+               isGroupProOnly,
+               !isUserPro {
+                vpnConnectionViewModel.selectBestLocation(with: locationId)
+            }
+        }
+    }
+
+    func noSelectedNodeToConnect() -> Bool {
+        return vpnConnectionViewModel.getSelectedCountryCode() == ""
+    }
+
+    func clearScrollHappened() {
+        locationsListTableViewDataSource.scrollHappened = false
+        favoriteListTableViewDataSource.scrollHappened = false
+        customConfigListTableViewDataSource.scrollHappened = false
+        staticIPListTableViewDataSource.scrollHappened = false
+    }
+
+    func reloadServerList() {
+        if viewModel.checkAccountWasDowngraded() {
+            if vpnConnectionViewModel.isDisconnected() {
+                loadLatencyValues()
+            } else {
+                vpnConnectionViewModel.updateLoadLatencyValuesOnDisconnect(with: true)
+            }
+        }
+        if isAnyRefreshControlIsRefreshing() {
+            loadLatencyValues()
+        }
+    }
+
+    func reloadCustomConfigs() {
+        customConfigListTableViewDataSource.updateCustomConfigList(with: viewModel.customConfigs.value)
+    }
+
+    func tableViewScrolled(toTop: Bool) {
+    }
+
+    override func setupLocalized() {
+        viewModel.updateSSID()
+    }
+
+    func openConnectionChangeDialog() {
+        router?.routeTo(to: RouteID.protocolSwitch(type: .change, error: nil), from: self)
+    }
+
+    deinit {
+        print("MainViewController deinit called")
+    }
+}

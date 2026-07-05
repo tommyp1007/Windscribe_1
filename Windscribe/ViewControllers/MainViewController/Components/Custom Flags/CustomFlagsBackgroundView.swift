@@ -1,0 +1,258 @@
+//
+//  FlagsBackgroundView.swift
+//  Windscribe
+//
+//  Created by Andre Fonseca on 25/03/2025.
+//  Copyright © 2025 Windscribe. All rights reserved.
+//
+
+import UIKit
+import Combine
+
+struct BackgroundInfoModel {
+    let image: UIImage?
+    let isConnected: Bool
+    let animates: Bool
+    let color: UIColor
+    let aspectRatioType: BackgroundAspectRatioType
+    var effect: BackgroundEffectType = .flag
+}
+
+protocol FlagsBackgroundViewModelType {
+    var backgroundInfoSubject: CurrentValueSubject<BackgroundInfoModel?, Never> { get }
+}
+
+class FlagsBackgroundViewModel: FlagsBackgroundViewModelType {
+    let backgroundInfoSubject = CurrentValueSubject<BackgroundInfoModel?, Never>(nil)
+
+    let locationsManager: LocationsManager
+    let lookAndFeelRepository: LookAndFeelRepositoryType
+    let backgroundFileManager: BackgroundFileManaging
+
+    var currentCountry: String = ""
+
+    private var isConnected = false
+    private var cancellables = Set<AnyCancellable>()
+
+    init(lookAndFeelRepository: LookAndFeelRepositoryType,
+         locationsManager: LocationsManager,
+         vpnStateRepository: VPNStateRepository,
+         backgroundFileManager: BackgroundFileManaging) {
+        self.lookAndFeelRepository = lookAndFeelRepository
+        self.locationsManager = locationsManager
+        self.backgroundFileManager = backgroundFileManager
+
+        locationsManager.bestLocationUpdatedTrigger
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+            guard let self = self else { return }
+            self.updateBackgroundImage(isConnected: self.isConnected)
+        }.store(in: &cancellables)
+
+        locationsManager.selectedLocationUpdated
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+            guard let self = self else { return }
+            self.updateBackgroundImage(isConnected: self.isConnected)
+        }.store(in: &cancellables)
+
+        lookAndFeelRepository.backgroundChangedTrigger
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+            guard let self = self else { return }
+            self.updateBackgroundImage(isConnected: self.isConnected)
+        }.store(in: &cancellables)
+
+        vpnStateRepository.getStatus()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self = self else { return }
+                self.isConnected = state == .connected
+                self.updateBackgroundImage(isConnected: self.isConnected)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func updateBackgroundImage(isConnected: Bool) {
+        var effect = BackgroundEffectType.flag
+        if isConnected {
+            effect = lookAndFeelRepository.backgroundEffectConnect
+        } else if !isConnected {
+            effect = lookAndFeelRepository.backgroundEffectDisconnect
+        }
+        backgroundInfoSubject.send(getBackgroundInfoModel(for: effect,
+                                                          isConnected: isConnected))
+    }
+
+    private func getBackgroundInfoModel(for effect: BackgroundEffectType,
+                                        isConnected: Bool) -> BackgroundInfoModel {
+        let color: UIColor = isConnected ? .connectedBlue : .nightBlue
+        let aspectRatio = lookAndFeelRepository.backgroundCustomAspectRatio
+        switch effect {
+        case .bundled(subtype: let subtype):
+            if let image = UIImage(named: subtype.assetName) {
+                return BackgroundInfoModel(image: image, isConnected: isConnected, animates: false,
+                                           color: color, aspectRatioType: aspectRatio,
+                                           effect: effect)
+            }
+        case .custom:
+            if let image = getImageURL(isConnected) {
+                return BackgroundInfoModel(image: image, isConnected: isConnected, animates: false,
+                                           color: color, aspectRatioType: aspectRatio,
+                                           effect: effect)
+            }
+        case .none:
+            return BackgroundInfoModel(image: nil, isConnected: isConnected, animates: false,
+                                       color: .clear, aspectRatioType: aspectRatio,
+                                       effect: effect)
+        default: break
+        }
+        return getLocationInfo(color: color, isConnected: isConnected)
+    }
+
+    private func getLocationInfo(color: UIColor, isConnected: Bool) -> BackgroundInfoModel {
+        let flagName = locationsManager.getLocationUIInfo().countryCode
+        let animates = currentCountry != flagName
+        currentCountry = flagName
+        return BackgroundInfoModel(image: UIImage(named: flagName),
+                                   isConnected: isConnected,
+                                   animates: animates, color: color,
+                                   aspectRatioType: .stretch)
+    }
+
+    private func getImageURL(_ isconnected: Bool) -> UIImage? {
+        let url: URL? = backgroundFileManager.getImageURL(for: isconnected ? .connect : .disconnect)
+        if let url = url,
+           let data = try? Data(contentsOf: url),
+           let image = UIImage(data: data) {
+            return image
+        }
+        return nil
+    }
+}
+
+class FlagsBackgroundView: UIView {
+    private var cancellables = Set<AnyCancellable>()
+
+    var viewModel: FlagsBackgroundViewModelType! {
+        didSet {
+            bindViewModel()
+        }
+    }
+
+    var backgroundImageView = UIImageView()
+    var backgroundImageViewGradientMask = RadialGradientMask()
+
+    var topMaskGradient = TopMaskGradientView()
+    var topNavBarHeader = TopNavBarHeader()
+
+    var flagWidth: CGFloat {
+        402
+    }
+
+    var barHeight: CGFloat {
+        topNavBarHeader.height
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    init() {
+        super.init(frame: .zero)
+        addViews()
+        setLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        backgroundImageViewGradientMask.frame = backgroundImageView.bounds
+    }
+
+    func redraw() {
+        topNavBarHeader.redrawGradient()
+    }
+
+    func changebackground(for info: BackgroundInfoModel) {
+        switch info.effect {
+        case .none:
+            backgroundImageView.layer.opacity = 0.0
+        case .flag:
+            backgroundImageView.layer.opacity = 0.20
+        default:
+            backgroundImageView.layer.opacity = 1.0
+        }
+        if info.animates, let newImage = info.image {
+            if backgroundImageView.image == nil {
+                backgroundImageView.image = newImage
+            } else {
+                slideNewImageUp(backgroundImageView, to: newImage)
+            }
+            return
+        }
+
+        backgroundImageView.image = info.image
+        backgroundImageView.contentMode = .scaleAspectFill
+        backgroundImageView.backgroundColor = .clear
+        if info.effect == .custom {
+            if info.aspectRatioType == .fill {
+                backgroundImageView.contentMode = .scaleToFill
+            } else if info.aspectRatioType == .tile, let image = info.image {
+                backgroundImageView.image = nil
+                backgroundImageView.backgroundColor = UIColor(patternImage: image)
+            }
+        }
+    }
+
+    private func bindViewModel() {
+        viewModel.backgroundInfoSubject
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] info in
+                guard let self = self, let info = info else { return }
+                self.topMaskGradient.isConnected = info.isConnected
+                self.changebackground(for: info)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func configureBackgroundImageView() {
+        backgroundImageView.image = UIImage(named: ImagesAsset.Backgrounds.one)
+        backgroundImageView.isUserInteractionEnabled = false
+        backgroundImageView.contentMode = .scaleAspectFill
+        backgroundImageView.setImageColor(color: .white)
+        backgroundImageView.mask = backgroundImageViewGradientMask
+    }
+
+    private func addViews() {
+        configureBackgroundImageView()
+        addSubview(backgroundImageView)
+        addSubview(topMaskGradient)
+        addSubview(topNavBarHeader)
+    }
+
+    private func setLayout() {
+        backgroundImageView.translatesAutoresizingMaskIntoConstraints = false
+        topMaskGradient.translatesAutoresizingMaskIntoConstraints = false
+        topNavBarHeader.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            // topNavBarLeftImageView
+            topNavBarHeader.topAnchor.constraint(equalTo: topAnchor),
+            topNavBarHeader.rightAnchor.constraint(equalTo: rightAnchor),
+            topNavBarHeader.leftAnchor.constraint(equalTo: leftAnchor),
+            topNavBarHeader.heightAnchor.constraint(equalToConstant: topNavBarHeader.height),
+
+            // flagView
+            backgroundImageView.topAnchor.constraint(equalTo: topNavBarHeader.bottomAnchor, constant: -30),
+            backgroundImageView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -30),
+            backgroundImageView.leftAnchor.constraint(equalTo: leftAnchor),
+            backgroundImageView.rightAnchor.constraint(equalTo: rightAnchor),
+
+            // topMaskGradient
+            topMaskGradient.topAnchor.constraint(equalTo: topAnchor),
+            topMaskGradient.centerXAnchor.constraint(equalTo: centerXAnchor),
+            topMaskGradient.heightAnchor.constraint(equalTo: heightAnchor),
+            topMaskGradient.widthAnchor.constraint(equalTo: widthAnchor)
+        ])
+    }
+}

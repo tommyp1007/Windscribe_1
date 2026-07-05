@@ -1,0 +1,90 @@
+//
+//  NewsFeedDetailView.swift
+//  Windscribe
+//
+//  Created by Soner Yuksel on 2025-03-14.
+//  Copyright © 2025 Windscribe. All rights reserved.
+//
+
+import SwiftUI
+
+struct NewsFeedDetailView: View {
+    let item: NewsFeedDataModel
+    let didTapExpand: () -> Void
+    let didTapAction: (NewsFeedActionType) -> Void
+
+    @Binding var isDarkMode: Bool
+    @State private var showRotation: Bool
+
+    init(item: NewsFeedDataModel,
+         didTapExpand: @escaping () -> Void,
+         didTapAction: @escaping (NewsFeedActionType) -> Void,
+         isDarkMode: Binding<Bool>) {
+        self.item = item
+        self.didTapExpand = didTapExpand
+        self.didTapAction = didTapAction
+        self._isDarkMode = isDarkMode
+        _showRotation = State(initialValue: item.expanded)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 16) {
+                        Text(item.title)
+                            .font(.medium(.callout))
+                            .foregroundColor(.from(.titleColor, isDarkMode))
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Image(ImagesAsset.chevronDown)
+                            .foregroundColor(.from(.iconColor, isDarkMode).opacity(item.expanded ? 1 : 0.3))
+                            .rotationEffect(.degrees(showRotation ? 180 : 0))
+                            .animation(.easeInOut(duration: 0.3), value: showRotation)
+                    }
+
+                    Text(DateFormatter.customNoticeFormat.string(from: item.date))
+                        .font(.regular(.footnote))
+                        .foregroundColor(.from(.timeColor, isDarkMode))
+
+                    // Description (Hidden for Collapsed State)
+                    if item.expanded {
+                        Text(item.description)
+                            .font(.regular(.callout))
+                            .foregroundColor(.from(.titleColor, isDarkMode))
+                            .padding(.top, 4)
+                    }
+
+                    if item.expanded, let actionLink = item.action {
+                        Button(
+                            action: {
+                                didTapAction(actionLink)
+                            }, label: {
+                                Text(actionLink.actionText)
+                                    .foregroundColor(Color.newsFeedButtonActionColor)
+                                    .font(.medium(.footnote))
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(
+                                        Color.newsFeedButtonActionBackgroundColor.opacity(0.15)
+                                    )
+                                    .clipShape(Capsule())
+                            }
+                        )
+                        .padding(.top, 8)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .onChange(of: item.expanded) { isExpanded in
+                showRotation = isExpanded
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                didTapExpand()
+            }
+        }
+    }
+}

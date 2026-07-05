@@ -1,0 +1,75 @@
+//
+//  BaseRouter.swift
+//  Windscribe
+//
+//  Created by Ginder Singh on 2023-12-15.
+//  Copyright © 2023 Windscribe. All rights reserved.
+//
+
+import Foundation
+import SafariServices
+import Swinject
+import SwiftUI
+
+class BaseRouter: NSObject, SFSafariViewControllerDelegate {
+    func goToSignUp(viewController: WSUIViewController, claimGhostAccount: Bool = false) {
+        let context = SignupFlowContext()
+        context.isFromGhostAccount = claimGhostAccount
+
+        let signUpView =  Assembler.resolve(SignUpView.self)
+            .environmentObject(context)
+
+        pushViewWithoutNavigationBar(from: viewController, view: signUpView)
+    }
+
+    func dismissPopup(navigationVC: UINavigationController?) {
+        navigationVC?.popToRootViewController(animated: true)
+    }
+
+    func pushViewWithoutNavigationBar<V: View>(from viewController: WSUIViewController, view: V, title: String? = nil) {
+        let hostingController = RoutedHostingController(rootView: view)
+        if let title = title {
+            hostingController.title = title
+
+            let backItem = UIBarButtonItem(title: "", style: .plain, target: nil, action: nil)
+            viewController.navigationItem.backBarButtonItem = backItem
+        }
+
+        hostingController.onPop = { [weak viewController] in
+            viewController?.changeNavigationBarStyle(isHidden: true)
+        }
+
+        // Sync navigation controller background with the incoming view before push to prevent
+        // white flash at edges during transition (especially on iPad multitasking)
+        if let navView = viewController.navigationController?.view {
+            navView.backgroundColor = hostingController.view.backgroundColor
+        }
+
+        viewController.navigationController?.pushViewController(hostingController, animated: true)
+
+        viewController.changeNavigationBarStyle(isHidden: false)
+        viewController.navigationController?.navigationBar.setNeedsLayout()
+    }
+
+    func presentViewModally<V: View>(from viewController: WSUIViewController, view: V, isTransparent: Bool = false) {
+        let hostingController = UIHostingController(rootView: view).then {
+            $0.modalPresentationStyle = .fullScreen
+        }
+
+        if isTransparent {
+            hostingController.modalTransitionStyle = .crossDissolve
+            hostingController.view.backgroundColor = UIColor.clear
+        }
+
+        viewController.present(hostingController, animated: true)
+    }
+
+    func presentViewModallyWithNavigation<V: View>(from viewController: WSUIViewController, view: V) {
+        let hostingController = RoutedHostingController(rootView: view)
+
+        let navigationController = UINavigationController(rootViewController: hostingController).then {
+            $0.modalPresentationStyle = .fullScreen
+        }
+        viewController.present(navigationController, animated: true)
+    }
+}

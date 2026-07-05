@@ -1,0 +1,306 @@
+//
+//  SignUpViewController.swift
+//  Windscribe
+//
+//  Created by Bushra Sagir on 17/07/24.
+//  Copyright © 2024 Windscribe. All rights reserved.
+//
+
+import Combine
+import Swinject
+import UIKit
+
+class SignUpViewController: PreferredFocusedViewController {
+    @IBOutlet var welcomeLabel: UILabel!
+    @IBOutlet var signUpButton: WSRoundButton!
+    @IBOutlet var infoLabel: UILabel!
+    @IBOutlet var infoView: UIView!
+    @IBOutlet var backButton: UIButton!
+    @IBOutlet var passwordTextField: PasswordTextFieldTv!
+    @IBOutlet var forgotButton: UIButton!
+    @IBOutlet var signUpTitle: UILabel!
+    @IBOutlet var usernameTextField: WSTextFieldTv!
+    var loadingView: UIActivityIndicatorView!
+    private var captchaOverlayView: UIView?
+    private var captchaPopupView: CaptchaView?
+
+    // MARK: - State properties
+
+    var viewModel: SignUpViewModel!, router: SignupRouter!, logger: FileLogger!
+    var claimGhostAccount = false
+    private var cancellables = Set<AnyCancellable>()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        logger.logD("SignUpViewController", "Displaying Signup Screen.")
+        setup()
+        setupLocalized()
+        // Do any additional setup after loading the view.
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesBegan(presses, with: event)
+        for press in presses where passwordTextField.isFocused {
+            if press.type == .rightArrow {
+                myPreferredFocusedView = passwordTextField.showHidePasswordButton
+                setNeedsFocusUpdate()
+                updateFocusIfNeeded()
+            }
+        }
+    }
+
+    func setup() {
+        if let backgroundImage = UIImage(named: "WelcomeBackground.png") {
+            view.backgroundColor = UIColor(patternImage: backgroundImage)
+        } else {
+            view.backgroundColor = .blue
+        }
+        welcomeLabel.font = UIFont.bold(size: 60)
+        passwordTextField.isSecureTextEntry = true
+        signUpTitle.font = UIFont.bold(size: 35)
+
+        forgotButton.titleLabel?.font = UIFont.text(size: 35)
+        forgotButton.titleLabel?.minimumScaleFactor = 0.5
+        forgotButton.titleLabel?.numberOfLines = 1
+        forgotButton.titleLabel?.adjustsFontSizeToFitWidth = true
+        forgotButton.setTitleColor(.whiteWithOpacity(opacity: 0.50), for: .normal)
+        forgotButton.setTitleColor(.white, for: .focused)
+
+        backButton.titleLabel?.font = UIFont.text(size: 35)
+        backButton.setTitleColor(.whiteWithOpacity(opacity: 0.50), for: .normal)
+        backButton.setTitleColor(.white, for: .focused)
+
+        loadingView = UIActivityIndicatorView(style: .large)
+        loadingView.isHidden = true
+        view.addSubview(loadingView)
+        loadingView.translatesAutoresizingMaskIntoConstraints = false
+        loadingView.translatesAutoresizingMaskIntoConstraints = false
+        view.addConstraints([
+            NSLayoutConstraint(item: loadingView as Any, attribute: .centerY, relatedBy: .equal, toItem: view, attribute: .centerY, multiplier: 1.0, constant: 0),
+            NSLayoutConstraint(item: loadingView as Any, attribute: .centerX, relatedBy: .equal, toItem: view, attribute: .centerX, multiplier: 1.0, constant: 0)
+        ])
+        usernameTextField.delegate = self
+        passwordTextField.delegate = self
+        bindView()
+    }
+
+    func setupLocalized() {
+        welcomeLabel.text = TextsAsset.slogan
+        signUpTitle.text = TextsAsset.signUp
+        usernameTextField.placeholder = TextsAsset.Authentication.username
+        passwordTextField.placeholder = TextsAsset.Authentication.password
+
+        signUpButton.setTitle(TextsAsset.signUp.uppercased(), for: .normal)
+        backButton.setTitle(TextsAsset.back, for: .normal)
+        forgotButton.setTitle(TextsAsset.Authentication.forgotPassword, for: .normal)
+    }
+
+    func bindView() {
+        viewModel.showLoadingView
+            .sink { [self] show in
+                if show {
+                    showLoading()
+                } else {
+                    hideLoading()
+                }
+            }
+            .store(in: &cancellables)
+        signUpButton.wasSelected
+            .sink { [self] _ in
+                viewModel.continueButtonTapped(userName: usernameTextField.text, password: passwordTextField.text, email: "", referrelUsername: "", ignoreEmailCheck: true, claimAccount: claimGhostAccount, voucherCode: "")
+            }
+            .store(in: &cancellables)
+        viewModel.failedState
+            .sink { [weak self] state in
+                self?.setFailureState(state: state)
+            }
+            .store(in: &cancellables)
+        viewModel.routeTo
+            .sink { [self] _ in
+                self.logger.logD("SignUpViewController", "Moving to home screen.")
+                router.routeTo(to: RouteID.home, from: self)
+            }
+            .store(in: &cancellables)
+        forgotButton.wasSelected
+            .sink { [self] _ in
+                router.routeTo(to: RouteID.forgotPassword, from: self)
+            }
+            .store(in: &cancellables)
+
+        viewModel.showCaptchaViewModel
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] captchaVM in
+                guard let self = self else { return }
+
+                let captchaPopupView = CaptchaView()
+                captchaPopupView.bind(to: captchaVM)
+
+                captchaPopupView.submitTap
+                  .receive(on: DispatchQueue.main)
+                  .sink { code in
+                    captchaVM.submitCaptcha.send(code)
+                  }
+                  .store(in: &self.cancellables)
+
+                captchaPopupView.cancelTap
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] in
+                        self?.dismissCaptchaPopup()
+                    }
+                    .store(in: &self.cancellables)
+
+                captchaPopupView.refreshTap
+                    .receive(on: DispatchQueue.main)
+                    .sink {
+                        captchaVM.refreshCaptcha.send(())
+                    }
+                    .store(in: &self.cancellables)
+
+                captchaVM.captchaDismiss
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] in
+                        self?.dismissCaptchaPopup()
+                    }
+                    .store(in: &self.cancellables)
+
+                self.showCaptchaPopup(captchaPopupView: captchaPopupView)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func showCaptchaPopup(captchaPopupView: CaptchaView) {
+        // Create overlay view (dimmed background)
+        let overlayView = UIView()
+        overlayView.backgroundColor = UIColor.black.withAlphaComponent(0.75)
+        overlayView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlayView)
+
+        NSLayoutConstraint.activate([
+            overlayView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            overlayView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            overlayView.topAnchor.constraint(equalTo: view.topAnchor),
+            overlayView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        self.captchaOverlayView = overlayView
+
+        // Add popup view on top of overlay
+        captchaPopupView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(captchaPopupView)
+
+        NSLayoutConstraint.activate([
+            captchaPopupView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            captchaPopupView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            captchaPopupView.topAnchor.constraint(equalTo: view.topAnchor),
+            captchaPopupView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        self.captchaPopupView = captchaPopupView
+
+        // Animate fade in
+        overlayView.alpha = 0
+        captchaPopupView.alpha = 0
+
+        UIView.animate(withDuration: 0.3) {
+            overlayView.alpha = 1
+            captchaPopupView.alpha = 1
+        }
+
+        DispatchQueue.main.async {
+            self.setNeedsFocusUpdate()
+            self.updateFocusIfNeeded()
+        }
+    }
+
+    private func dismissCaptchaPopup() {
+        guard let overlayView = captchaOverlayView,
+              let popupView = captchaPopupView else { return }
+
+        UIView.animate(withDuration: 0.3, animations: {
+            overlayView.alpha = 0
+            popupView.alpha = 0
+        }, completion: { _ in
+            overlayView.removeFromSuperview()
+            popupView.removeFromSuperview()
+            self.captchaOverlayView = nil
+            self.captchaPopupView = nil
+        })
+    }
+
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let captchaPopup = captchaPopupView {
+            return [captchaPopup]
+        }
+        return super.preferredFocusEnvironments
+    }
+
+    private func setFailureState(state: SignUpErrorState) {
+        switch state {
+        case let .username(error):
+            usernameTextField.textColor = UIColor.failRed
+            infoLabel.text = error
+            infoView.isHidden = false
+        case let .password(error):
+            passwordTextField.textColor = UIColor.failRed
+            infoLabel.text = error
+            infoView.isHidden = false
+        case let .email(error):
+            infoLabel.text = error
+            infoLabel.textColor = UIColor.failRed
+            infoView.isHidden = false
+        case let .api(error):
+            infoLabel.text = error
+            infoLabel.textColor = UIColor.failRed
+            infoView.isHidden = false
+        case let .network(error):
+            infoLabel.text = error
+            infoLabel.textColor = UIColor.failRed
+            infoView.isHidden = false
+        case .none:
+            infoView.isHidden = true
+            infoLabel.text = ""
+        }
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with _: UIFocusAnimationCoordinator) {
+        DispatchQueue.main.async {
+            if context.nextFocusedView == self.usernameTextField {
+                self.usernameTextField.attributedPlaceholder = NSAttributedString(
+                    string: TextsAsset.Authentication.username,
+                    attributes: [NSAttributedString.Key.foregroundColor: UIColor.grayWithOpacity(opacity: 0.60)])
+            } else {
+                self.usernameTextField.attributedPlaceholder = NSAttributedString(
+                    string: TextsAsset.Authentication.username,
+                    attributes: [NSAttributedString.Key.foregroundColor: UIColor.whiteWithOpacity(opacity: 0.50)])
+            }
+            if context.nextFocusedView == self.passwordTextField {
+                self.passwordTextField.attributedPlaceholder = NSAttributedString(
+                    string: TextsAsset.Authentication.password,
+                    attributes: [NSAttributedString.Key.foregroundColor: UIColor.grayWithOpacity(opacity: 0.60)])
+            } else {
+                self.passwordTextField.attributedPlaceholder = NSAttributedString(
+                    string: TextsAsset.Authentication.password,
+                    attributes: [NSAttributedString.Key.foregroundColor: UIColor.whiteWithOpacity(opacity: 0.50)])
+            }
+        }
+    }
+
+    func hideLoading() {
+        loadingView.isHidden = true
+    }
+
+    func showLoading() {
+        loadingView.startAnimating()
+        loadingView.isHidden = false
+    }
+
+    @IBAction func backButtonAction(_: Any) {
+        navigationController?.popViewController(animated: true)
+    }
+}
+
+extension SignUpViewController: UITextFieldDelegate {
+    func textFieldDidBeginEditing(_: UITextField) {
+        viewModel.keyBoardWillShow()
+    }
+}
