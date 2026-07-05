@@ -1,7 +1,7 @@
 workflows:
   windscribe-unsigned-ipa:
     name: Windscribe Unsigned IPA
-    max_build_duration: 180
+    max_build_duration: 120
     instance_type: mac_mini_m2
     environment:
       # Windscribe CI pins Xcode 26.3; 26.4 can hit legacy-target + Realm build glitches.
