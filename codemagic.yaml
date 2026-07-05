@@ -9,13 +9,32 @@ workflows:
         XCODE_PROJECT: Windscribe.xcodeproj
         XCODE_SCHEME: Windscribe-Release
         XCODE_CONFIGURATION: Production
+        DERIVED_DATA: $CM_BUILD_DIR/DerivedData
+        GO_VERSION: "1.23.11"
     scripts:
+      - name: Prepare build tools
+        script: |
+          set -e
+          chmod +x build_wireguard_go_bridge.sh
       - name: Resolve Swift Package dependencies
         script: |
           set -e
           xcodebuild -resolvePackageDependencies \
             -project "$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME"
+            -scheme "$XCODE_SCHEME" \
+            -derivedDataPath "$DERIVED_DATA"
+      - name: Build WireGuard Go bridge
+        script: |
+          set -e
+          BRIDGE_BUILD_DIR="$DERIVED_DATA/Build/Intermediates.noindex/Windscribe.build/Production-iphoneos/WireGuardGoBridgeiOS.build"
+          mkdir -p "$BRIDGE_BUILD_DIR/tmp"
+          export BUILD_DIR="$BRIDGE_BUILD_DIR"
+          export CONFIGURATION_BUILD_DIR="$BRIDGE_BUILD_DIR"
+          export CONFIGURATION_TEMP_DIR="$BRIDGE_BUILD_DIR/tmp"
+          export SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          export PLATFORM_NAME=iphoneos
+          export ARCHS=arm64
+          ./build_wireguard_go_bridge.sh "$GO_VERSION"
       - name: Build unsigned iOS app
         script: |
           set -e
@@ -25,7 +44,7 @@ workflows:
             -configuration "$XCODE_CONFIGURATION" \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath "$CM_BUILD_DIR/DerivedData" \
+            -derivedDataPath "$DERIVED_DATA" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -33,13 +52,13 @@ workflows:
       - name: Package unsigned IPA
         script: |
           set -e
-          APP_PATH=$(find "$CM_BUILD_DIR/DerivedData" -path "*/Build/Products/*-iphoneos/Windscribe.app" -type d | head -1)
+          APP_PATH=$(find "$DERIVED_DATA" -path "*/Build/Products/*-iphoneos/Windscribe.app" -type d | head -1)
           if [ -z "$APP_PATH" ]; then
-            APP_PATH=$(find "$CM_BUILD_DIR/DerivedData" -name "Windscribe.app" -type d | head -1)
+            APP_PATH=$(find "$DERIVED_DATA" -name "Windscribe.app" -type d | head -1)
           fi
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: Windscribe.app not found in DerivedData"
-            find "$CM_BUILD_DIR/DerivedData" -name "*.app" -type d || true
+            find "$DERIVED_DATA" -name "*.app" -type d || true
             exit 1
           fi
           echo "Packaging app at: $APP_PATH"
