@@ -4251,7 +4251,7 @@
 			isa = PBXGroup;
 			children = (
 				1E5553BA2D8D880600F16AF0 /* Components */,
-				E9DF548A274BD4F000E9C672 /* UI Layout  */,
+				E9DF548A274BD4F000E9C672 /* UI Layout_ */,
 				1E4933482BF3A50700C853AF /* Static IP List */,
 				1E4933512BF50BA000C853AF /* LocationList */,
 				1E49334E2BF4E3EB00C853AF /* Fav Nodes List */,
@@ -4835,7 +4835,7 @@
 			path = Delegates;
 			sourceTree = "<group>";
 		};
-		E9DF548A274BD4F000E9C672 /* UI Layout  */ = {
+		E9DF548A274BD4F000E9C672 /* UI Layout_ */ = {
 			isa = PBXGroup;
 			children = (
 				AF4E927521F8D17500A3F584 /* MainViewController+UI.swift */,
@@ -4843,7 +4843,7 @@
 				AF4ECA9B23E3434300E09223 /* MainViewController+Theme.swift */,
 				E9DF548B274BD8FE00E9C672 /* MainViewController+UILayout.swift */,
 			);
-			path = "UI Layout ";
+			path = "UI Layout_";
 			sourceTree = "<group>";
 		};
 		F40419352D822CE90005EF97 /* HTMLParser */ = {
