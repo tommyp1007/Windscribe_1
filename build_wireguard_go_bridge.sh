@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -eo pipefail
 
 # Skip this script when running SwiftUI previews
 if [ "${XCODE_RUNNING_FOR_PREVIEWS:-}" = "1" ]; then
@@ -78,20 +78,12 @@ find_wireguard_go_dir() {
   return 1
 }
 
-marker_file="${BUILD_DIR:-/tmp}/sdkroot_marker.txt"
-output_lib="${CONFIGURATION_BUILD_DIR:-${BUILD_DIR:-/tmp}}/libwg-go.a"
-
-if [ -f "$output_lib" ] && [ -f "$marker_file" ] && [ "$(cat "$marker_file")" = "${SDKROOT:-}" ]; then
-  echo "WireGuard bridge already built for SDKROOT ${SDKROOT}. Skipping."
-  exit 0
-fi
-
-ensure_go
-
 if [ -z "${BUILD_DIR:-}" ]; then
   echo "Error: BUILD_DIR is not set."
   exit 1
 fi
+
+ensure_go
 
 derived_root="$(find_derived_data_root || true)"
 if [ -z "$derived_root" ]; then
@@ -110,19 +102,23 @@ export PATH="${PATH}:/usr/local/bin:/opt/homebrew/bin"
 export PLATFORM_NAME="${PLATFORM_NAME:-iphoneos}"
 export ARCHS="${ARCHS:-arm64}"
 
-mkdir -p "${CONFIGURATION_BUILD_DIR:-$BUILD_DIR}"
-mkdir -p "${CONFIGURATION_TEMP_DIR:-$BUILD_DIR/tmp}"
+build_dir="${CONFIGURATION_BUILD_DIR:-$BUILD_DIR}"
+temp_dir="${CONFIGURATION_TEMP_DIR:-$build_dir/tmp}"
+output_lib="${build_dir}/libwg-go.a"
+
+mkdir -p "$build_dir" "$temp_dir"
 
 echo "Building WireGuard bridge in ${wireguard_go_dir}"
 echo "SDKROOT=${SDKROOT:-unset} PLATFORM_NAME=${PLATFORM_NAME} ARCHS=${ARCHS}"
-echo "CONFIGURATION_BUILD_DIR=${CONFIGURATION_BUILD_DIR:-unset}"
+echo "CONFIGURATION_BUILD_DIR=${build_dir}"
 
-(
-  cd "$wireguard_go_dir"
-  /usr/bin/make clean build
-)
+cd "$wireguard_go_dir"
+# Never short-circuit: Xcode's PBXLegacyTarget breaks if this script exits early.
+/usr/bin/make build
 
-mkdir -p "$(dirname "$marker_file")"
-printf '%s\n' "${SDKROOT:-}" > "$marker_file"
+if [ ! -f "$output_lib" ]; then
+  echo "Error: Expected bridge artifact at ${output_lib}"
+  exit 1
+fi
 
 echo "WireGuardGoBridge successfully built at ${output_lib}"

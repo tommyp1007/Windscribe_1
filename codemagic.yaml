@@ -1,10 +1,11 @@
 workflows:
   windscribe-unsigned-ipa:
     name: Windscribe Unsigned IPA
-    max_build_duration: 120
+    max_build_duration: 180
     instance_type: mac_mini_m2
     environment:
-      xcode: latest
+      # Windscribe CI pins Xcode 26.3; 26.4 can hit legacy-target + Realm build glitches.
+      xcode: 26.3
       vars:
         XCODE_PROJECT: Windscribe.xcodeproj
         XCODE_SCHEME: Windscribe-Release
@@ -38,6 +39,7 @@ workflows:
       - name: Build unsigned iOS app
         script: |
           set -e
+          # Serial builds avoid PBXLegacyTarget "target ended" races on CI.
           xcodebuild build \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -45,6 +47,7 @@ workflows:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$DERIVED_DATA" \
+            -jobs 1 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
